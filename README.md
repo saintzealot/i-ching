@@ -1,3 +1,12 @@
+---
+title: I-Ching 周易算卦
+emoji: ☯️
+colorFrom: indigo
+colorTo: yellow
+sdk: docker
+app_port: 7860
+---
+
 # I-Ching · 周易算卦
 
 基于传统铜钱法的周易六十四卦占卜系统，支持 AI 卦辞解读。
