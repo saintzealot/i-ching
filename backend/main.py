@@ -207,22 +207,26 @@ async def ws_interpret(websocket: WebSocket):
         # 通知前端进入思考阶段
         await websocket.send_json({"type": "thinking"})
 
-        stream = await lm_client.chat.completions.create(
+        create_kwargs = dict(
             model=os.environ.get("LLM_MODEL", "google/gemma-4-26b-a4b"),
             messages=[{"role": "user", "content": prompt}],
             max_tokens=4096,
             temperature=0.7,
             stream=True,
-            extra_body={"reasoning_split": True},
         )
+
+        try:
+            stream = await lm_client.chat.completions.create(
+                **create_kwargs, extra_body={"reasoning_split": True},
+            )
+        except Exception:
+            # 回退：不带 reasoning_split，兼容不支持该参数的 LLM 服务
+            stream = await lm_client.chat.completions.create(**create_kwargs)
 
         async for chunk in stream:
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
-            # 调试：打印 delta 内容
-            print(f"[DEBUG] delta: content={delta.content!r}, role={delta.role!r}, has_reasoning={hasattr(delta, 'reasoning_details')}", flush=True)
-            # 只推送 content，跳过 reasoning_details
             if delta.content:
                 await websocket.send_json({"type": "content", "text": delta.content})
 

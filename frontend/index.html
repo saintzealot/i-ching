@@ -712,6 +712,12 @@ body::before {
 </div>
 
 <script>
+/* ========== marked 配置：禁用 HTML 防止 XSS ========== */
+marked.setOptions({ renderer: new marked.Renderer(), breaks: true });
+var tokenizer = new marked.Tokenizer();
+tokenizer.html = function() { return false; };
+marked.use({ tokenizer: tokenizer });
+
 /* ========== 全局状态 ========== */
 const API_BASE = window.location.origin;
 let isDivining = false;
@@ -1022,8 +1028,8 @@ function buildHexagramDisplay(data) {
   // 爻线显示区
   var linesDiv = el('div', { className: 'lines-display' });
 
-  // 爻从初爻（第1次摇）到上爻（第6次摇）显示
-  for (var i = 0; i < lines.length; i++) {
+  // 爻从上（第6爻）到下（第1爻）显示，符合传统卦图排列
+  for (var i = lines.length - 1; i >= 0; i--) {
     var val = lines[i];
     var changing = isChanging(val);
 
@@ -1048,10 +1054,10 @@ function buildHexagramDisplay(data) {
   container.appendChild(linesDiv);
 }
 
-/** 逐爻显示动画（从上到下，初爻先显示） */
+/** 逐爻显示动画（从下到上，初爻先显示） */
 async function animateLines() {
   var rows = document.querySelectorAll('#hexDisplay .line-row');
-  for (var i = 0; i < rows.length; i++) {
+  for (var i = rows.length - 1; i >= 0; i--) {
     rows[i].classList.add('visible');
     await sleep(300);
   }
