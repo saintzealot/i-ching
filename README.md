@@ -15,9 +15,10 @@ app_port: 7860
 
 - **铜钱法摇卦** — 模拟三枚铜钱投掷六次，依据传统规则生成本卦与变卦
 - **完整卦象数据** — 六十四卦卦辞、象辞、爻辞，八卦符号与五行属性
-- **AI 卦辞解读** — 接入任意 OpenAI 兼容 LLM（LM Studio / Ollama / DeepSeek / OpenAI 等），WebSocket 流式输出
+- **AI 流式解读** — 接入任意 OpenAI 兼容 LLM，WebSocket 流式推送，打字机效果 + Markdown 渲染
 - **3D 铜钱动画** — 逐爻翻转动画，逐行揭示卦象，沉浸式体验
 - **六十四卦速查** — 可展开的全卦浏览网格，点击查看完整卦辞与爻辞
+- **频率限制** — 按 IP 限制 AI 解读请求频率，防止滥用
 
 ## 技术栈
 
@@ -42,6 +43,7 @@ i-ching/
 │   └── test_divination.py   # 算法 & API & 数据完整性测试
 ├── dev-doc/
 │   └── INTERFACE.md         # API 接口契约文档
+├── Dockerfile               # Docker 部署配置
 ├── start.sh                 # 一键安装 & 启动脚本
 ├── .env.example             # 环境变量示例
 └── README.md
@@ -94,6 +96,19 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 
 > AI 卦辞解读依赖 LLM 服务，其余功能（摇卦、卦象查询）不受影响。
 
+## Docker 部署
+
+```bash
+docker build -t i-ching .
+docker run -p 7860:7860 \
+  -e LLM_BASE_URL=你的API地址 \
+  -e LLM_API_KEY=你的密钥 \
+  -e LLM_MODEL=模型名称 \
+  i-ching
+```
+
+项目已部署到 HuggingFace Spaces，支持 Docker SDK 自动构建。
+
 ## API 接口
 
 | 方法 | 路径 | 说明 |
@@ -124,6 +139,10 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 source .venv/bin/activate
 pytest tests/ -v
 ```
+
+## 致谢
+
+本项目由 [Claude Code](https://claude.ai/claude-code)、[OpenAI Codex](https://openai.com/codex) 与 [OpenCode](https://opencode.ai) 协同完成，从架构设计、代码实现到部署上线，全程由 AI 辅助开发。
 
 ## 许可证
 

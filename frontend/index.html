@@ -402,6 +402,15 @@ body::before {
   line-height: 2;
   color: var(--text);
 }
+.interpretation-text h1,
+.interpretation-text h2,
+.interpretation-text h3 {
+  color: var(--gold);
+  font-size: 1.1em;
+  margin: 0.8em 0 0.3em;
+}
+.interpretation-text p { margin: 0.4em 0; }
+.interpretation-text strong { color: var(--gold-light); }
 .interpretation-text.typing::after {
   content: '▍';
   color: var(--gold);
@@ -609,6 +618,7 @@ body::before {
   .hex-symbol { font-size: 2.5em; }
 }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
 </head>
 <body>
 
@@ -630,7 +640,7 @@ body::before {
 
   <!-- 问卦区 -->
   <div class="divine-section">
-    <label for="question">心中所惑，诚心写下（可不填）</label>
+    <label for="question">心中所惑，诚心写下（不填则解读综合运势）</label>
     <textarea id="question" placeholder="例如：近期事业运势如何？" rows="2" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();startDivine();}"></textarea>
     <br>
     <button class="btn-divine" id="btnDivine" onclick="startDivine()">摇 卦</button>
@@ -936,6 +946,7 @@ async function showResult(data) {
   var wsUrl = API_BASE.replace(/^http/, 'ws') + '/ws/interpret';
   var ws = new WebSocket(wsUrl);
   var firstContent = true;
+  var rawText = '';
 
   ws.onopen = function() {
     ws.send(JSON.stringify({
@@ -957,12 +968,13 @@ async function showResult(data) {
       interpEl.classList.add('thinking');
     } else if (msg.type === 'content') {
       if (firstContent) {
-        interpEl.textContent = '';
+        rawText = '';
         interpEl.classList.remove('thinking');
         interpEl.classList.add('typing');
         firstContent = false;
       }
-      interpEl.textContent += msg.text;
+      rawText += msg.text;
+      interpEl.innerHTML = marked.parse(rawText);
     } else if (msg.type === 'done') {
       interpEl.classList.remove('typing', 'thinking');
     } else if (msg.type === 'error') {
@@ -1010,8 +1022,8 @@ function buildHexagramDisplay(data) {
   // 爻线显示区
   var linesDiv = el('div', { className: 'lines-display' });
 
-  // 爻从上（第6）到下（第1）显示
-  for (var i = lines.length - 1; i >= 0; i--) {
+  // 爻从初爻（第1次摇）到上爻（第6次摇）显示
+  for (var i = 0; i < lines.length; i++) {
     var val = lines[i];
     var changing = isChanging(val);
 
@@ -1036,12 +1048,10 @@ function buildHexagramDisplay(data) {
   container.appendChild(linesDiv);
 }
 
-/** 逐爻显示动画（从下到上） */
+/** 逐爻显示动画（从上到下，初爻先显示） */
 async function animateLines() {
   var rows = document.querySelectorAll('#hexDisplay .line-row');
-  // rows 在 DOM 中从上到下排列，即 [上爻, 五爻, ..., 初爻]
-  // 需要从初爻（最后一个）开始显示
-  for (var i = rows.length - 1; i >= 0; i--) {
+  for (var i = 0; i < rows.length; i++) {
     rows[i].classList.add('visible');
     await sleep(300);
   }

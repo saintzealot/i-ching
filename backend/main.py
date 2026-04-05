@@ -148,7 +148,8 @@ def build_interpret_prompt(req: dict) -> str:
 3. 给出与问题相关的具体行动建议
 4. 语气温和有智慧，像一位长者在指点迷津
 重点：你的每一段分析都要紧扣求问者的问题「{question}」，不要泛泛而谈。
-控制在200-350字以内。"""
+控制在200-350字以内。
+格式要求：直接输出正文，不要加标题。用**加粗**标注关键词，段落间用换行分隔。"""
     else:
         return f"""你是一位精通周易的国学大师，求问者未提出具体问题，请对所得卦象做综合运势解读。
 
@@ -161,7 +162,8 @@ def build_interpret_prompt(req: dict) -> str:
 2. 从事业、人际、决策等方面给出综合提示
 3. 给出行动建议
 4. 语气温和有智慧，像一位长者在指点迷津
-控制在200-350字以内。"""
+控制在200-350字以内。
+格式要求：直接输出正文，不要加标题。用**加粗**标注关键词，段落间用换行分隔。"""
 
 
 # ============================================================
@@ -211,18 +213,23 @@ async def ws_interpret(websocket: WebSocket):
             max_tokens=4096,
             temperature=0.7,
             stream=True,
+            extra_body={"reasoning_split": True},
         )
 
         async for chunk in stream:
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
-            # 只推送 content，跳过 reasoning_content
+            # 调试：打印 delta 内容
+            print(f"[DEBUG] delta: content={delta.content!r}, role={delta.role!r}, has_reasoning={hasattr(delta, 'reasoning_details')}", flush=True)
+            # 只推送 content，跳过 reasoning_details
             if delta.content:
                 await websocket.send_json({"type": "content", "text": delta.content})
 
         await websocket.send_json({"type": "done"})
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         try:
             await websocket.send_json({"type": "error", "text": str(e)})
         except Exception:
