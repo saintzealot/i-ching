@@ -9,6 +9,8 @@ I-Ching FastAPI 后端应用
 
 import os
 import json
+import time
+from collections import defaultdict
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -162,10 +164,39 @@ def build_interpret_prompt(req: dict) -> str:
 控制在200-350字以内。"""
 
 
+# ============================================================
+# 简单频率限制（按 IP，5 次/分钟）
+# ============================================================
+
+RATE_LIMIT = 5
+RATE_WINDOW = 60  # 秒
+_rate_records: dict[str, list[float]] = defaultdict(list)
+
+
+def _check_rate_limit(ip: str) -> bool:
+    """检查 IP 是否超出频率限制，返回 True 表示允许"""
+    now = time.time()
+    records = _rate_records[ip]
+    # 清理过期记录
+    _rate_records[ip] = [t for t in records if now - t < RATE_WINDOW]
+    if len(_rate_records[ip]) >= RATE_LIMIT:
+        return False
+    _rate_records[ip].append(now)
+    return True
+
+
 @app.websocket("/ws/interpret")
 async def ws_interpret(websocket: WebSocket):
     """WebSocket 端点：流式推送 AI 卦辞解读"""
     await websocket.accept()
+
+    # 频率限制检查
+    client_ip = websocket.client.host if websocket.client else "unknown"
+    if not _check_rate_limit(client_ip):
+        await websocket.send_json({"type": "error", "text": "请求过于频繁，请稍后再试"})
+        await websocket.close()
+        return
+
     try:
         raw = await websocket.receive_text()
         request = json.loads(raw)
