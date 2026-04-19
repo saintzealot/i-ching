@@ -177,6 +177,131 @@
     return 'interrupted';
   }
 
+  // ============================================================
+  // 干支纪年 / 纪月 / 纪日 —— 装饰性传统编年展示
+  //
+  // 算法要点（简化 vs 精度权衡已在代码里标注）：
+  // - 年柱：按节气年切换（立春，非元旦）。立春简化为 2/4，±1 天边界误差可接受。
+  // - 月柱：24 节气中的"月建起点"（立春/惊蛰/清明/立夏/芒种/小暑/立秋/白露/
+  //   寒露/立冬/大雪/小寒）决定地支月；平均日期硬编码（每年 ±1 天波动）。
+  //   月干用"五虎遁"口诀：年干 → 寅月起干。
+  //   口诀：甲己丙寅起、乙庚戊寅起、丙辛庚寅起、丁壬壬寅起、戊癸甲寅起。
+  //   公式：寅月天干索引 = (年干索引 % 5) * 2 + 2，mod 10。
+  // - 日柱：锚点法——公历 2000-01-01 = 戊午日（甲子轮索引 54，多家万年历公认）。
+  //   用 Date.UTC 计算整日差避开夏令时毫秒漂移。
+  //
+  // 精度（Codex 第九轮 B-H1/H2 review 显式采纳的限制声明）：
+  // 本实现为**装饰性近似**，误差窗口限于"节气当日 ±1 天"。例如：
+  // - 2025 立春实际是 02-03 22:10（UTC+8），本代码按 2/4 切换，导致
+  //   2025-02-03 全天（含 22:10 后）仍报甲辰年；
+  // - 2025/2029 立春落在 2/3，本代码仍按 2/4 切，年柱晚切 1 个公历日；
+  // - 2025-2030 区间内，约 12 个节气（小寒/立春/惊蛰/清明/立夏/芒种/立秋/白露
+  //   等）会出现"实际节气日比代码早 1 天"。
+  //
+  // 这些误差对"顶部 meta-bar 显示今天是 X 日"的装饰性场景可接受：
+  // 误差窗口 ≤ 24 天/年 × ±1 天 ≈ 全年 6.6% 的日期可能错 1 位。
+  //
+  // 升级路径（当前不做，非本次范围）：
+  // 1) 年份 × 节气精确日期查表（~600+ 数据点，覆盖 2020-2050）；
+  // 2) 接入 sxtwl / 寿星天文历算法（精确到分钟，含节气时刻）；
+  // 3) 服务端 API 返回节气时刻，前端缓存。
+  // ============================================================
+
+  var HEAVENLY_STEMS    = ['甲','乙','丙','丁','戊','己','庚','辛','壬','癸'];
+  var EARTHLY_BRANCHES  = ['子','丑','寅','卯','辰','巳','午','未','申','酉','戌','亥'];
+
+  function ganzhiFromIndex(i) {
+    var n = ((i % 60) + 60) % 60;
+    return HEAVENLY_STEMS[n % 10] + EARTHLY_BRANCHES[n % 12];
+  }
+
+  // 节气表：[公历月, 公历日, 该节气起点的月建地支索引]
+  // 地支索引：子=0 丑=1 寅=2 卯=3 辰=4 巳=5 午=6 未=7 申=8 酉=9 戌=10 亥=11
+  var SOLAR_TERMS = [
+    [2,  4, 2],   // 立春 → 寅月
+    [3,  6, 3],   // 惊蛰 → 卯月
+    [4,  5, 4],   // 清明 → 辰月
+    [5,  6, 5],   // 立夏 → 巳月
+    [6,  6, 6],   // 芒种 → 午月
+    [7,  7, 7],   // 小暑 → 未月
+    [8,  8, 8],   // 立秋 → 申月
+    [9,  8, 9],   // 白露 → 酉月
+    [10, 8, 10],  // 寒露 → 戌月
+    [11, 7, 11],  // 立冬 → 亥月
+    [12, 7, 0],   // 大雪 → 子月
+    // 小寒（1/6 左右 → 丑月）在 monthBranchIndex 里单独处理（跨年）。
+  ];
+
+  function isBeforeLichun(date) {
+    var m = date.getMonth() + 1, d = date.getDate();
+    return m < 2 || (m === 2 && d < 4);
+  }
+
+  function monthBranchIndex(date) {
+    var m = date.getMonth() + 1, d = date.getDate();
+    // 1/1 ~ 1/5：小寒前，仍是上一个节气年的子月
+    if (m === 1 && d < 6) return 0;
+    // 1/6 ~ 2/3：小寒后、立春前，丑月
+    if (m === 1) return 1;
+    if (m === 2 && d < 4) return 1;
+    // 其余按节气表顺序匹配（从后往前找第一个 <= 当前日的节气）
+    for (var i = SOLAR_TERMS.length - 1; i >= 0; i--) {
+      var sm = SOLAR_TERMS[i][0], sd = SOLAR_TERMS[i][1];
+      if (m > sm || (m === sm && d >= sd)) return SOLAR_TERMS[i][2];
+    }
+    return 0;
+  }
+
+  // 年柱索引：按节气年（立春切换）
+  function yearGanzhiIndex(date) {
+    var y = date.getFullYear();
+    if (isBeforeLichun(date)) y -= 1;
+    // 公元 4 年是甲子年起点，(y - 4) % 60 = 干支轮序号
+    return ((y - 4) % 60 + 60) % 60;
+  }
+
+  function ganzhiOfYear(date) {
+    if (!(date instanceof Date) || isNaN(date)) return '';
+    return ganzhiFromIndex(yearGanzhiIndex(date));
+  }
+
+  function ganzhiOfMonth(date) {
+    if (!(date instanceof Date) || isNaN(date)) return '';
+    var branch   = monthBranchIndex(date);
+    var yearIdx  = yearGanzhiIndex(date);
+    var yearStem = yearIdx % 10;
+    // 五虎遁：寅月天干起点 = (年干 % 5) * 2 + 2
+    var yinStem  = ((yearStem % 5) * 2 + 2) % 10;
+    // 从寅月（地支 2）起数第几个月
+    var fromYin  = ((branch - 2) + 12) % 12;
+    var stem     = (yinStem + fromYin) % 10;
+    return HEAVENLY_STEMS[stem] + EARTHLY_BRANCHES[branch];
+  }
+
+  // 日柱锚点：公历 2000-01-01 = 戊午日（甲子轮索引 54）
+  var DAY_EPOCH_INDEX = 54;
+
+  function daysSinceEpoch(date) {
+    var epochUTC = Date.UTC(2000, 0, 1);
+    var localMidnightUTC = Date.UTC(
+      date.getFullYear(),
+      date.getMonth(),
+      date.getDate()
+    );
+    return Math.round((localMidnightUTC - epochUTC) / 86400000);
+  }
+
+  function ganzhiOfDay(date) {
+    if (!(date instanceof Date) || isNaN(date)) return '';
+    return ganzhiFromIndex(DAY_EPOCH_INDEX + daysSinceEpoch(date));
+  }
+
+  // 组合展示：截图格式 "X 月 · X 日"（不含年柱，保极简气质）
+  function ganzhiDateLabel(date) {
+    if (!(date instanceof Date) || isNaN(date)) return '';
+    return ganzhiOfMonth(date) + '月 · ' + ganzhiOfDay(date) + '日';
+  }
+
   return {
     computeBianLines:  computeBianLines,
     coinsForLine:      coinsForLine,
@@ -187,5 +312,9 @@
     linesVisualClass:  linesVisualClass,
     formatCoinResult:  formatCoinResult,
     classifyStreamEnd: classifyStreamEnd,
+    ganzhiOfYear:      ganzhiOfYear,
+    ganzhiOfMonth:     ganzhiOfMonth,
+    ganzhiOfDay:       ganzhiOfDay,
+    ganzhiDateLabel:   ganzhiDateLabel,
   };
 }));

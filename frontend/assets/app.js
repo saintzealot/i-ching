@@ -107,13 +107,22 @@ function haptic(pattern) {
   } catch (e) { /* no-op */ }
 }
 
-/* 简化公历展示 */
+/* 干支纪月纪日 —— 传统中国编年，对齐墨玉鎏金整体气质。
+ * 算法在 iching-core.js（ganzhiDateLabel）；若 Core 未挂载（老缓存）fallback 公历。 */
 (function() {
+  var el = $('lunarDate');
+  if (!el) return;
   var d = new Date();
-  var y = d.getFullYear();
-  var m = String(d.getMonth() + 1).padStart(2, '0');
-  var dt = String(d.getDate()).padStart(2, '0');
-  $('lunarDate').textContent = y + '·' + m + '·' + dt;
+  var label = (typeof Core !== 'undefined' && Core.ganzhiDateLabel)
+    ? Core.ganzhiDateLabel(d)
+    : '';
+  if (!label) {
+    var y = d.getFullYear();
+    var m = String(d.getMonth() + 1).padStart(2, '0');
+    var dt = String(d.getDate()).padStart(2, '0');
+    label = y + '·' + m + '·' + dt;
+  }
+  el.textContent = label;
 })();
 
 /* ==============================================================
@@ -255,7 +264,6 @@ function buildCoinSvg(size, face) {
     base:'#8a6220', highlight:'#d9a94a', tip:'#f0d080',
     shadow:'#3a2208', deep:'#1a0c02',
     charFill:'#6a4818', charTip:'#e8c878', charShadow:'#1a0c02',
-    dropShadow:'rgba(0,0,0,0.55)',
   };
   var r = size / 2;
   var hole = size * 0.2;

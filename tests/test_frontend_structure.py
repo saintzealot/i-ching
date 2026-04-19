@@ -718,31 +718,99 @@ def test_coins_row_halo_via_before_pseudo(html: str):
     )
     assert m, "缺少 .coins-row::before 金色 halo 伪元素"
     body = m.group(1)
+    # —— 必备字段（结构性）——
     assert "radial-gradient" in body, (
         ".coins-row::before 应用 radial-gradient 做圆形 halo"
     )
     assert "border-radius:" in body and "50%" in body, (
         ".coins-row::before 必须 border-radius: 50% 保证圆形"
     )
-    assert "rgba(201" in body, (
-        ".coins-row::before halo 应为金色（rgba(201,169,97,...)）"
-    )
-    assert re.search(r"z-index:\s*-1", body), (
-        ".coins-row::before 应 z-index: -1 沉到铜钱 SVG 之下"
-    )
-    # 显式正方形 width/height + translate 居中，不用 inset 负值：
-    # 继承 .coins-row 260×170 的非正方形状会和 border-radius: 50% 组合成椭圆鸡蛋
-    assert re.search(r"width:\s*\d{3}px", body), (
-        ".coins-row::before 应显式 width（避免继承 .coins-row 260×170 导致椭圆）"
-    )
-    assert re.search(r"height:\s*\d{3}px", body), ".coins-row::before 应显式 height"
     assert "translate(-50%, -50%)" in body or "translate(-50%,-50%)" in body, (
         ".coins-row::before 应 translate(-50%, -50%) 居中于 .coins-row 中心"
     )
-    # 必须加 blur 柔化边缘；无 blur 时 radial-gradient transparent stop 卡在盒子
-    # 边缘 → 清晰圆形硬边 → 观感像独立色块（非融入背景的气场光晕）
-    assert re.search(r"filter:\s*blur\(\d+px\)", body), (
-        ".coins-row::before 必须 filter: blur(Npx) 柔化边缘，否则成鸡蛋硬边"
+    # —— 严格精度（Codex 第九轮 A-L2 采纳：宽松 regex 不足以锁住形状）——
+    # 宽高必须严格 420px 且相等（否则 border-radius 50% 退化为椭圆）
+    width_match = re.search(r"width:\s*(\d+)px", body)
+    height_match = re.search(r"height:\s*(\d+)px", body)
+    assert width_match and width_match.group(1) == "420", (
+        f".coins-row::before width 必须严格 420px，实际 {width_match and width_match.group(1)!r}"
+    )
+    assert height_match and height_match.group(1) == "420", (
+        f".coins-row::before height 必须严格 420px，实际 {height_match and height_match.group(1)!r}"
+    )
+    assert width_match.group(1) == height_match.group(1), (
+        ".coins-row::before width 必须等于 height（否则 border-radius 50% 变椭圆）"
+    )
+    # 金色必须是 rgba(201,169,97,0.22)（c9a961 ≈ 老铜金；alpha 0.22 是"气场但不喧宾"）
+    assert re.search(r"rgba\(201\s*,\s*169\s*,\s*97\s*,\s*0\.22\)", body), (
+        ".coins-row::before 金色必须精确 rgba(201,169,97,0.22) —— "
+        "alpha 偏差会让 halo 太虚或太刺眼"
+    )
+    # transparent stop 必须 60%（太低 halo 范围缩小，太高硬边明显）
+    assert re.search(r"transparent\s+60%", body), (
+        ".coins-row::before radial-gradient 必须以 transparent 60% 结尾"
+    )
+    # blur 必须严格 22px（< 柔化不够 / > halo 感知消失）
+    assert re.search(r"filter:\s*blur\(22px\)", body), (
+        ".coins-row::before filter 必须严格 blur(22px)"
+    )
+    # pointer-events: none 防止 halo 截获点击（启用手摇时可能误触）
+    assert re.search(r"pointer-events:\s*none", body), (
+        ".coins-row::before 必须 pointer-events: none，否则截获铜钱区点击"
+    )
+    # z-index 非负值（配合 .coins-row 的 isolation: isolate 本地栈）
+    # 不允许 z-index: -1 —— 若祖先未来有背景色会被遮
+    zi_match = re.search(r"z-index:\s*(-?\d+)", body)
+    assert zi_match, ".coins-row::before 应显式设置 z-index"
+    assert int(zi_match.group(1)) >= 0, (
+        f".coins-row::before z-index 不应为负（现 {zi_match.group(1)}），"
+        "依赖 .coins-row 的 isolation: isolate 建立本地 stacking context"
+    )
+
+
+def test_coins_row_has_local_stacking_context(html: str):
+    """Codex 第九轮 A-L1 采纳：.coins-row 必须建立本地 stacking context，
+    防止未来重构把 halo 伪元素压没。"""
+    m = re.search(r"\.coins-row\s*\{([^}]*)\}", html, re.DOTALL)
+    assert m, "缺少 .coins-row 规则"
+    body = m.group(1)
+    assert re.search(r"isolation:\s*isolate", body), (
+        ".coins-row 必须 isolation: isolate —— 本地 stacking context"
+    )
+    # .coin-wrap 必须 z-index >= 1 浮在 ::before halo 之上
+    wrap_match = re.search(r"\.coin-wrap\s*\{([^}]*)\}", html, re.DOTALL)
+    assert wrap_match, "缺少 .coin-wrap 规则"
+    wrap_body = wrap_match.group(1)
+    assert re.search(r"z-index:\s*[1-9]\d*", wrap_body), (
+        ".coin-wrap 必须 z-index >= 1 浮在 halo 之上"
+    )
+
+
+def test_coin_svg_no_dead_drop_shadow_field(app_js: str):
+    """Codex 第九轮 A-L3 采纳：buildCoinSvg 删 inline filter 后 p.dropShadow
+    字段应一并删除，避免遗留误导性死字段。"""
+    m = re.search(
+        r"function\s+buildCoinSvg[\s\S]{0,400}?var\s+p\s*=\s*\{([^}]*)\}", app_js
+    )
+    assert m, "未在 buildCoinSvg 中找到 palette 对象"
+    palette_body = m.group(1)
+    assert "dropShadow" not in palette_body, (
+        "buildCoinSvg palette 不应含 dropShadow 字段 —— inline filter 已删，"
+        "该字段无读取路径，遗留会误导维护者"
+    )
+
+
+def test_lunar_date_uses_ganzhi_not_gregorian(app_js: str):
+    """meta-bar 左上日期走传统干支纪月纪日（Core.ganzhiDateLabel），对齐应用气质。
+    fallback 到公历 y·m·d 允许（防老缓存），但主路径必须是 ganzhiDateLabel。"""
+    assert "Core.ganzhiDateLabel" in app_js, (
+        "app.js 未调用 Core.ganzhiDateLabel —— lunarDate 仍显示公历"
+    )
+    m = re.search(r"\$\('lunarDate'\)[\s\S]{0,800}?textContent", app_js)
+    assert m, "未找到 lunarDate 赋值代码块"
+    snippet = m.group(0)
+    assert "ganzhiDateLabel" in snippet, (
+        "lunarDate 赋值块必须包含 ganzhiDateLabel 调用（不只是 import 但没用）"
     )
 
 
