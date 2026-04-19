@@ -45,12 +45,52 @@ app.add_middleware(
 
 
 # ============================================================
+# 安全响应头 — 纵深防御
+#
+# 为什么走 HTTP header 而非 <meta>：
+#   1. frame-ancestors / report-uri / sandbox 在 <meta> CSP 中被浏览器忽略（W3C CSP3 §6.1）
+#   2. HTTP header 的优先级覆盖 meta，方便统一维护
+# ============================================================
+
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self'; "  # 无 unsafe-inline，inline JS 已外部化
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "  # inline style 暂保留
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data:; "
+    # connect-src 选型：纯 'self'，依赖 CSP3 §6.7.2.8 明文覆盖同源 ws:/wss:
+    #   http → ws（同 host/port）、https → wss（同 host/port）都是规范内匹配
+    #   浏览器基线：Chrome 58+（2017）/ Firefox 50+（2016）/ Safari 15.4+（2022）
+    # 反对 scheme-wide 'ws: wss:'：后者允许任意域 WS，XSS 旁路后可外泄数据
+    # 反对显式 'wss://<host>'：硬编码 host 伤可移植性（HF Space 域迁移即断）、
+    #   本地 dev 还要额外允许 ws://localhost，动态生成则新增 Host 伪造攻击面
+    # 部署后必须在 dev-doc/DEPLOY_CHECKLIST.md 列出的多浏览器里实地验证
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "  # 只能在 header 里生效
+    "base-uri 'self'; "
+    "form-action 'self'"
+)
+
+
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = _CSP
+    response.headers["X-Frame-Options"] = "DENY"  # 旧浏览器兜底
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    return response
+
+
+# ============================================================
 # 请求/响应模型
 # ============================================================
 
 
 class DivineRequest(BaseModel):
     """算卦请求"""
+
     question: str = ""
 
 
@@ -122,7 +162,9 @@ def build_interpret_prompt(req: dict) -> str:
     changing_lines = req.get("changing_lines", [])
     lines_text = req.get("lines_text", [])
     if changing_lines:
-        changing_texts = [lines_text[p - 1] for p in changing_lines if 1 <= p <= len(lines_text)]
+        changing_texts = [
+            lines_text[p - 1] for p in changing_lines if 1 <= p <= len(lines_text)
+        ]
         changing_desc = f"\n动爻：{', '.join(changing_texts)}"
         if req.get("changed_hexagram_name"):
             changing_desc += f"\n变卦：{req['changed_hexagram_name']}"
@@ -167,6 +209,43 @@ def build_interpret_prompt(req: dict) -> str:
 
 
 # ============================================================
+# WebSocket 安全：Origin 白名单 + payload 上限
+#
+# 为什么必须：浏览器对 WebSocket 不走 CORS preflight，任何第三方页面
+# （例如 evil.com）都可以从访客浏览器发起 wss:// 连接，把本 Space 的 LLM
+# key 当免费 prompt 代理消费（CSWSH 攻击）。Origin header 由浏览器根据
+# "当前页面源"自动设置，JS 无法伪造——因此在 accept() 前校验 Origin
+# 是防御 CSWSH 的行业标准做法。
+#
+# 默认含 localhost 开发域以便 clone → uvicorn 即刻可跑。生产通过
+# HF Spaces Secret 追加：ALLOWED_ORIGINS=https://saintzealot-i-ching.hf.space
+# 默认内置 localhost 不引入风险——公网用户无法冒充 localhost（它只对
+# 受害者自己的机器有效，那时候已经输到家了）。
+# ============================================================
+
+DEFAULT_ALLOWED_ORIGINS = [
+    # 常用开发端口
+    "http://localhost:8765",
+    "http://127.0.0.1:8765",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    # Docker / HF Spaces 约定端口（Dockerfile: EXPOSE 7860；README: app_port: 7860）
+    # 漏了会让 `docker run -p 7860:7860 ...` 本地测 WS 握手直接被拒——见 2026-04-19
+    # Codex 第八轮 F2 修复记录
+    "http://localhost:7860",
+    "http://127.0.0.1:7860",
+]
+_extra_origins = os.environ.get("ALLOWED_ORIGINS", "")
+ALLOWED_ORIGINS: set[str] = set(DEFAULT_ALLOWED_ORIGINS) | {
+    o.strip() for o in _extra_origins.split(",") if o.strip()
+}
+
+# 单条 WS 消息 payload 上限：合法的 interpret 请求最多 2 KB
+# （question ≤ 500 字 UTF-8 + hexagram/lines 元数据约 1 KB）；4 KB 给富余。
+WS_MAX_PAYLOAD_BYTES = 4096
+
+
+# ============================================================
 # 简单频率限制（按 IP，5 次/分钟）
 # ============================================================
 
@@ -190,6 +269,14 @@ def _check_rate_limit(ip: str) -> bool:
 @app.websocket("/ws/interpret")
 async def ws_interpret(websocket: WebSocket):
     """WebSocket 端点：流式推送 AI 卦辞解读"""
+    # Origin 校验必须在 accept() 之前——否则握手已完成，close 就是事后关门。
+    # 严格模式：无 Origin header 也拒（浏览器必带，无 Origin 只可能是服务端脚本伪造）。
+    # 关闭码 1008 = policy violation。
+    origin = websocket.headers.get("origin")
+    if not origin or origin not in ALLOWED_ORIGINS:
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
 
     # 频率限制检查
@@ -201,6 +288,11 @@ async def ws_interpret(websocket: WebSocket):
 
     try:
         raw = await websocket.receive_text()
+        # payload 大小检查：防止构造超大 prompt 消耗 LLM 配额
+        if len(raw.encode("utf-8")) > WS_MAX_PAYLOAD_BYTES:
+            await websocket.send_json({"type": "error", "text": "请求过大"})
+            await websocket.close(code=1009)  # 1009 = message too big
+            return
         request = json.loads(raw)
         prompt = build_interpret_prompt(request)
 
@@ -217,7 +309,8 @@ async def ws_interpret(websocket: WebSocket):
 
         try:
             stream = await lm_client.chat.completions.create(
-                **create_kwargs, extra_body={"reasoning_split": True},
+                **create_kwargs,
+                extra_body={"reasoning_split": True},
             )
         except Exception:
             # 回退：不带 reasoning_split，兼容不支持该参数的 LLM 服务
@@ -233,6 +326,7 @@ async def ws_interpret(websocket: WebSocket):
         await websocket.send_json({"type": "done"})
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         try:
             await websocket.send_json({"type": "error", "text": str(e)})

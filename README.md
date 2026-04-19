@@ -13,10 +13,16 @@ app_port: 7860
 
 ## 功能特色
 
-- **铜钱法摇卦** — 模拟三枚铜钱投掷六次，依据传统规则生成本卦与变卦
+- **墨玉鎏金视觉** — 深空星幕 + 悬浮八卦（凸起铸造、顺时针流光）+ 鎏金铜钱（`乾亨元利` 凸起铸造字、铜锈 patina、天圆地方）
+- **铜钱法摇卦** — 模拟三枚铜钱投掷六次，依据传统规则生成本卦与变卦；摇卦位置有轻微扰动，视觉更真实
+- **自动 / 手摇 双模式** — 底部分段按钮切换；手摇模式下点击铜钱区 或 轻摇手机（DeviceMotion，iOS 需首次授权）即可让当前爻落定，参与感更强
+- **爻位进度置顶 + 卦象 Progressive** — 顶部实时显示「第 X 爻 · N/6」与 6 段 dash 进度条；中部小卦象从底向上逐爻生长，动爻自带鎏金光晕；底部「字 · 花 · 花」实时显示本爻铜钱正反面
+- **移动端优先** — 安全区适配、拇指热区 CTA、触感震动反馈（Android）、右滑关闭抽屉、防 iOS 键盘放大
 - **完整卦象数据** — 六十四卦卦辞、象辞、爻辞，八卦符号与五行属性
-- **AI 流式解读** — 接入任意 OpenAI 兼容 LLM，WebSocket 流式推送，打字机效果 + Markdown 渲染
-- **3D 铜钱动画** — 逐爻翻转动画，逐行揭示卦象，沉浸式体验
+- **AI 流式解读** — 接入任意 OpenAI 兼容 LLM，WebSocket 流式推送，打字机效果；Markdown 经本地化 `marked` + `DOMPurify` 双层清洗（排版标签白名单、外链仅 http(s)），外链点击有二次确认 modal；失败/中断时显示"重新解读"按钮，只有收到 done 信号的内容才写入历史
+- **纵深防御** — CSP 主经 FastAPI 响应头下发（`frame-ancestors 'none'` 真正防嵌入）+ meta 兜底；`script-src` 已去 `unsafe-inline`（inline 脚本与事件全部外部化到 `assets/app.js`，用事件委托路由）；`connect-src 'self'` 依赖 CSP3 覆盖同源 WS，不开 scheme-wide 通配避免外泄；vendor 脚本本地化消除 CDN 供应链风险；双序号防护（`_interpSeq` 防 stale WS、`_divineSeq` 防起卦动画中途切视图导致的 DOM 竞态）；响应头附加 `X-Frame-Options: DENY` / `X-Content-Type-Options: nosniff` / `Referrer-Policy` / `Permissions-Policy`
+- **六爻仪式** — 一屏一事：起卦→逐爻落定→结果展开，沉浸式进度与呼吸动效
+- **卦象历史** — 近 30 次卦象 localStorage 存储，右侧抽屉回溯
 - **六十四卦速查** — 可展开的全卦浏览网格，点击查看完整卦辞与爻辞
 - **频率限制** — 按 IP 限制 AI 解读请求频率，防止滥用
 
@@ -38,9 +44,16 @@ i-ching/
 │   ├── hexagrams_data.py    # 六十四卦 & 八卦完整数据
 │   └── requirements.txt     # Python 依赖
 ├── frontend/
-│   └── index.html           # 单页前端应用
+│   ├── index.html              # 单页前端应用（墨玉鎏金视觉方向）
+│   └── assets/
+│       ├── iching-core.js      # 纯函数模块（爻值/布局/拼音/流状态分类，支持 Node 单测）
+│       ├── app.js              # 主应用脚本（从 index.html 外部化，便于 CSP 去 unsafe-inline）
+│       └── vendor/             # 本地化的第三方库（marked、DOMPurify）
 ├── tests/
-│   └── test_divination.py   # 算法 & API & 数据完整性测试
+│   ├── test_divination.py      # 后端算法 & API & 数据完整性
+│   ├── test_backend_headers.py # 安全响应头（CSP / XFO / nosniff 等）
+│   ├── test_frontend_structure.py  # 前端 HTML/CSS 结构性静态测试
+│   └── test_frontend_js.py     # 前端 JS 纯函数（子进程调 node）
 ├── dev-doc/
 │   └── INTERFACE.md         # API 接口契约文档
 ├── Dockerfile               # Docker 部署配置
@@ -93,8 +106,11 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 | `LLM_API_KEY` | API 密钥 | `lm-studio` |
 | `LLM_MODEL` | 模型名称 | `google/gemma-4-26b-a4b` |
 | `PORT` | 服务端口 | `8000` |
+| `ALLOWED_ORIGINS` | WS 握手允许的额外 Origin（逗号分隔），生产部署必配 | 空 |
 
 > AI 卦辞解读依赖 LLM 服务，其余功能（摇卦、卦象查询）不受影响。
+>
+> **生产部署必配 `ALLOWED_ORIGINS`**：WebSocket 不走 CORS preflight，后端在握手前校验 `Origin` 防止 CSWSH（第三方页面消费你的 LLM 配额）。本地开发已内置 `localhost:8000` / `localhost:8765` 默认值；部署到 HF Spaces 时在 Secret 里加 `ALLOWED_ORIGINS=https://你的用户名-space名.hf.space` 即可。
 
 ## Docker 部署
 
@@ -107,7 +123,9 @@ docker run -p 7860:7860 \
   i-ching
 ```
 
-项目已部署到 HuggingFace Spaces，支持 Docker SDK 自动构建。
+> **推到公网访问时**需额外传 `-e ALLOWED_ORIGINS=https://你的域名`——浏览器 Origin 不在白名单会被 close 1008，AI 解读不工作。本地 `docker run -p 7860:7860 ...` 访问 `localhost:7860` 已在默认白名单，无需配。
+
+项目已部署到 HuggingFace Spaces，支持 Docker SDK 自动构建。部署后需按 [dev-doc/DEPLOY_CHECKLIST.md](dev-doc/DEPLOY_CHECKLIST.md) 做多浏览器实地验证（字符串级 CSP 测试无法替代真实浏览器执行）。
 
 ## API 接口
 
@@ -139,6 +157,12 @@ docker run -p 7860:7860 \
 source .venv/bin/activate
 pytest tests/ -v
 ```
+
+测试分三层：
+
+- **后端（`test_divination.py`）** — 算法、API、数据完整性
+- **前端结构（`test_frontend_structure.py`）** — DOM 锚点、关键文案、meta、XSS 配置、安全反模式、函数签名、动画 keyframes、响应式断点
+- **前端纯函数（`test_frontend_js.py`）** — 通过 `node` 子进程加载 `iching-core.js`，测试爻值换变、铜钱布局、拼音映射等纯函数；若本机没有 `node` 会 skip
 
 ## 致谢
 
