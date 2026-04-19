@@ -15,7 +15,7 @@
 <!-- 本地化 vendor：消除 CDN 供应链风险，同时便于 CSP 只放 self -->
 <script src="assets/vendor/marked-15.0.12.min.js"></script>
 <script src="assets/vendor/dompurify-3.1.5.min.js"></script>
-<script src="assets/iching-core.js?v=2"></script>
+<script src="assets/iching-core.js?v=5"></script>
 <style>
 /* ========== 基础重置 ========== */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -199,6 +199,30 @@ button { touch-action: manipulation; }
   position: relative; width: 260px; height: 170px;
   display: flex; align-items: center; justify-content: center;
 }
+/* 铜钱区金色气场：单层柔光晕，中心 = 铜钱区几何中心，三枚铜钱落在正中。
+ * 参数参考 .cosmos .halo（420×420 + blur 24px + alpha 0.18）—— 那是已经被验证
+ * "融入深空背景不喧宾夺主"的组合。这里把 alpha 微升到 0.22 + blur 略降到 22px，
+ * 让起卦气场比首页氛围 halo 更显著一档，但仍保持柔雾感，不要变鸡蛋。
+ *
+ * 必须显式 420×420 正方形 + border-radius 50% 才是圆；
+ * 若用 inset: -Npx 继承 .coins-row 260×170 尺寸 + border-radius 50%
+ * 会得到椭圆 —— 历史坑。 */
+.coins-row::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 420px;
+  height: 420px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(circle,
+    rgba(201,169,97,0.22) 0%,
+    transparent 60%);
+  filter: blur(22px);
+  pointer-events: none;
+  z-index: -1;
+}
 .coin-wrap {
   position: absolute;
   transition: left 0.5s cubic-bezier(.4,.2,.3,1),
@@ -211,6 +235,17 @@ button { touch-action: manipulation; }
 .coin-spin {
   display: block;
   transition: filter 0.4s ease-out, opacity 0.4s ease-out;
+}
+/* 铜钱 SVG 只保留黑色投影。金色 halo 改由 .coin-wrap::before CSS 伪元素承担
+ * —— 彻底绕开 SVG filter 合成链。
+ *
+ * 历史坑：字面 buildCoinSvg 内部 <g filter="url(#cast)"> 对 text 合成时
+ * feFlood 的矩形残余无法被 feComposite 完全裁掉，外层 drop-shadow(0 0 16px)
+ * 把这个矩形残余 halo 化 → 铜钱背后出现硬边金棕色方块。
+ * 花面（ellipse+circle，纯几何形状）无此问题；字面（text）是唯一犯罪现场。
+ * 外扩 halo 搬到独立伪元素后 SVG alpha 再乱也影响不到 halo 形状。 */
+.coin-spin svg {
+  filter: drop-shadow(0 3.28px 4.1px rgba(0,0,0,0.55));
 }
 .coin-wrap.shaking {
   /* 外层微抖 —— 模拟手心颤动，幅度极小（2px）避免干扰中心光晕 */
@@ -1285,7 +1320,7 @@ button { touch-action: manipulation; }
   </div>
 </div>
 
-<script src="assets/app.js?v=2"></script>
+<script src="assets/app.js?v=5"></script>
 
 </body>
 </html>

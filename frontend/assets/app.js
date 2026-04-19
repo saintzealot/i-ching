@@ -271,7 +271,9 @@ function buildCoinSvg(size, face) {
   var yang = (face === '字');
 
   var parts = [];
-  parts.push('<svg xmlns="' + SVG_NS + '" width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '" style="filter: drop-shadow(0 0 ' + (size*0.2) + 'px rgba(201,169,97,0.6)) drop-shadow(0 ' + (size*0.04) + 'px ' + (size*0.05) + 'px ' + p.dropShadow + ');">');
+  // drop-shadow 走 CSS（.coin-spin svg），摇卦态覆盖为只剩黑投影；避免 iOS Safari
+  // 外层 blur 嵌套内层金色 drop-shadow 时退化为 viewBox 矩形的合成 bug。
+  parts.push('<svg xmlns="' + SVG_NS + '" width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '">');
 
   parts.push('<defs>');
   parts.push('<radialGradient id="face-' + u + '" cx="35%" cy="28%" r="85%">' +

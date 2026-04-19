@@ -675,6 +675,77 @@ def test_shaking_halo_ring_present(html: str):
     assert "halo-breathe" in html, "缺少 halo-breathe 动画引用"
 
 
+def test_coin_svg_no_inline_filter_in_constructor(app_js: str):
+    """buildCoinSvg 的 SVG 根元素不得内联 filter —— 否则 CSS 层控制失效，
+    且摇卦态 iOS Safari 会重演"金色 drop-shadow 退化为 viewBox 矩形"bug。"""
+    m = re.search(r"buildCoinSvg[\s\S]{0,800}?<svg[^>]*>", app_js)
+    assert m, "未在 buildCoinSvg 中找到 <svg 根元素"
+    svg_open = m.group(0)
+    assert "filter:" not in svg_open, (
+        "buildCoinSvg SVG 根元素不应 inline filter —— 走 CSS .coin-spin svg 控制"
+    )
+
+
+def test_coin_svg_filter_has_only_black_drop_shadow(html: str):
+    """.coin-spin svg 只保留黑色投影 drop-shadow；金色 halo 改走 .coin-wrap::before
+    伪元素承担，彻底绕开 SVG filter 合成链。字面 <g filter="url(#cast)"> 对 text
+    合成时 feFlood 矩形残余会被外层 CSS drop-shadow(外扩 halo) 放大成黄色方块，
+    这是根因 bug。"""
+    m = re.search(
+        r"\.coin-spin\s+svg\s*\{([^}]*)\}",
+        html,
+        re.DOTALL,
+    )
+    assert m, "缺少 .coin-spin svg { ... } 规则"
+    body = m.group(1)
+    assert "drop-shadow" in body, ".coin-spin svg 应保留黑色投影 drop-shadow"
+    # 金色 drop-shadow 识别标志：rgba(201,169,97,...)（#c9a961 的 rgb）
+    assert "rgba(201" not in body, (
+        ".coin-spin svg 不应含金色外扩 drop-shadow —— "
+        "会放大 <g filter='url(#cast)'> 字面 feFlood 矩形残余成黄色方块"
+    )
+
+
+def test_coins_row_halo_via_before_pseudo(html: str):
+    """金色 halo 由 .coins-row::before 承担：单层大光晕，中心 = 铜钱区几何中心，
+    三枚铜钱落在光晕正中。不用 .coin-wrap::before（三个小 halo 叠加成花生形状），
+    避免与 SVG filter 合成交互（那条路径会把 <g filter='url(#cast)'> 字面 feFlood
+    矩形残余放大成黄色方块）。"""
+    m = re.search(
+        r"\.coins-row::before\s*\{([^}]*)\}",
+        html,
+        re.DOTALL,
+    )
+    assert m, "缺少 .coins-row::before 金色 halo 伪元素"
+    body = m.group(1)
+    assert "radial-gradient" in body, (
+        ".coins-row::before 应用 radial-gradient 做圆形 halo"
+    )
+    assert "border-radius:" in body and "50%" in body, (
+        ".coins-row::before 必须 border-radius: 50% 保证圆形"
+    )
+    assert "rgba(201" in body, (
+        ".coins-row::before halo 应为金色（rgba(201,169,97,...)）"
+    )
+    assert re.search(r"z-index:\s*-1", body), (
+        ".coins-row::before 应 z-index: -1 沉到铜钱 SVG 之下"
+    )
+    # 显式正方形 width/height + translate 居中，不用 inset 负值：
+    # 继承 .coins-row 260×170 的非正方形状会和 border-radius: 50% 组合成椭圆鸡蛋
+    assert re.search(r"width:\s*\d{3}px", body), (
+        ".coins-row::before 应显式 width（避免继承 .coins-row 260×170 导致椭圆）"
+    )
+    assert re.search(r"height:\s*\d{3}px", body), ".coins-row::before 应显式 height"
+    assert "translate(-50%, -50%)" in body or "translate(-50%,-50%)" in body, (
+        ".coins-row::before 应 translate(-50%, -50%) 居中于 .coins-row 中心"
+    )
+    # 必须加 blur 柔化边缘；无 blur 时 radial-gradient transparent stop 卡在盒子
+    # 边缘 → 清晰圆形硬边 → 观感像独立色块（非融入背景的气场光晕）
+    assert re.search(r"filter:\s*blur\(\d+px\)", body), (
+        ".coins-row::before 必须 filter: blur(Npx) 柔化边缘，否则成鸡蛋硬边"
+    )
+
+
 def test_coin_toss_drop_class_wired(html: str):
     """抛落弹跳触发：.just-landed 类 + 落地回调里 JS 加此类 + 绑定 coin-toss 动画。"""
     assert re.search(r"\.coin-wrap\.just-landed\b", html), (
