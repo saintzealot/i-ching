@@ -464,19 +464,34 @@ button { touch-action: manipulation; }
   display: flex; flex-direction: column; justify-content: flex-end;
   align-items: center;
 }
+/* 爻线与结果页 `.hexes .col .h-line` 1:1 对齐：5 段黄铜渐变、同值 inset
+ * 金属边、同值 gap、transparent 中段。填充 gap 的两版尝试（暗铜 / 鎏金光）
+ * 都被驳回——真正的根因是预览屏的 cosmos/coin halo 衬得 transparent gap 显"抠色"，
+ * 而非 gap 本身需要填什么。先对齐第三屏，halo 侧若仍需调整再动。 */
 .df-hex-preview .hex-yao {
-  width: 104px; height: 8px; margin: 2px 0;
+  width: 104px; height: 8px; margin: 2px 0; position: relative; border-radius: 1px;
   opacity: 0; transform: translateY(-4px);
   transition: opacity .45s ease-out, transform .45s ease-out;
 }
 .df-hex-preview .hex-yao.shown { opacity: 1; transform: none; }
 .df-hex-preview .hex-yao.yang {
-  background: linear-gradient(90deg, #8a6220, #e8c477 50%, #8a6220);
-  border-radius: 1px;
+  background: linear-gradient(90deg,
+    #6b4a1c 0%, #c9a961 18%, #ead29a 50%, #c9a961 82%, #6b4a1c 100%);
+  box-shadow: inset 0 1px 0 rgba(255,220,160,0.22),
+              inset 0 -1px 0 rgba(0,0,0,0.35);
 }
 .df-hex-preview .hex-yao.yin {
+  background: transparent;
+  box-shadow: none;
+  display: flex; gap: 18px;
+}
+.df-hex-preview .hex-yao.yin::before,
+.df-hex-preview .hex-yao.yin::after {
+  content: ""; flex: 1; height: 100%; border-radius: 1px;
   background: linear-gradient(90deg,
-    #8a6220 0 40%, transparent 40% 60%, #8a6220 60% 100%);
+    #6b4a1c 0%, #c9a961 22%, #ead29a 50%, #c9a961 78%, #6b4a1c 100%);
+  box-shadow: inset 0 1px 0 rgba(255,220,160,0.22),
+              inset 0 -1px 0 rgba(0,0,0,0.35);
 }
 .df-hex-preview .hex-yao.changing {
   box-shadow: 0 0 10px rgba(232,196,119,0.65);
@@ -1348,7 +1363,7 @@ button { touch-action: manipulation; }
     <div class="tabs" id="tabs">
       <button type="button" class="active" data-tab="judgment">卦辞</button>
       <button type="button" data-tab="lines">爻辞</button>
-      <button type="button" data-tab="interp">AI 解读</button>
+      <button type="button" data-tab="interp">卦象解读</button>
     </div>
     <div class="tab-body" id="tabBody">
       <div class="pane active" data-pane="judgment"><p id="paneJudgment"></p></div>
@@ -1383,7 +1398,7 @@ button { touch-action: manipulation; }
 <div class="modal-overlay" id="linkConfirm" data-close-outside>
   <div class="modal-content lc-card" role="dialog" aria-modal="true" aria-labelledby="lcTitle">
     <div class="lc-title" id="lcTitle">即将打开外部链接</div>
-    <div class="lc-hint">AI 解读里的链接来自模型输出，请确认 URL 可信再打开：</div>
+    <div class="lc-hint">卦象解读里的链接来自模型输出，请确认 URL 可信再打开：</div>
     <div class="lc-url" id="lcUrl"></div>
     <div class="lc-actions">
       <button class="lc-cancel" id="lcCancel" type="button">取消</button>
