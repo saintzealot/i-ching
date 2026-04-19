@@ -10,11 +10,12 @@ I-Ching FastAPI 后端应用
 import os
 import json
 import time
+import hashlib
 from collections import defaultdict
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 
@@ -341,6 +342,11 @@ async def ws_interpret(websocket: WebSocket):
 
 # ============================================================
 # 静态文件服务（serve frontend/ 目录）
+#
+# 缓存策略：index.html 走 no-cache，每次必须重新验证（ETag 命中返回 304）；
+# 带 ?v= 版本号的 assets 走 1 年 immutable 缓存（URL 变化即新资源）；
+# 其余 assets 1 小时兜底。版本号 ASSET_VERSION 由资产文件内容 sha256 自动计算，
+# 通过占位符 __ASSET_VERSION__ 在启动时渲染进 index.html，无需手动 bump。
 # ============================================================
 
 # 获取项目根目录（backend 的上级目录）
@@ -348,14 +354,90 @@ _backend_dir = os.path.dirname(os.path.abspath(__file__))
 _project_root = os.path.dirname(_backend_dir)
 _frontend_dir = os.path.join(_project_root, "frontend")
 
+# 纳入 hash 计算的资产文件 —— 任一文件内容变则 ASSET_VERSION 变
+_ASSET_FILES = (
+    "assets/app.js",
+    "assets/iching-core.js",
+    "assets/vendor/marked-15.0.12.min.js",
+    "assets/vendor/dompurify-3.1.5.min.js",
+)
 
-@app.get("/")
-async def serve_index():
-    """返回前端首页"""
-    index_path = os.path.join(_frontend_dir, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    return {"message": "I-Ching API 已启动。前端页面尚未部署。"}
+
+def _compute_asset_version() -> str:
+    """拼接所有 _ASSET_FILES 的字节，sha256 前 10 位作为版本标识。
+    缺失文件静默跳过（dev 环境部分文件可能尚未生成）。"""
+    hasher = hashlib.sha256()
+    for rel in _ASSET_FILES:
+        path = os.path.join(_frontend_dir, rel)
+        try:
+            with open(path, "rb") as f:
+                hasher.update(f.read())
+        except FileNotFoundError:
+            continue
+    return hasher.hexdigest()[:10]
+
+
+def _load_index_bytes(version: str) -> bytes:
+    """读 index.html，替换 __ASSET_VERSION__ 占位符为真实哈希。
+    启动时一次性执行，结果缓存在模块级变量里，后续请求零 I/O。"""
+    with open(os.path.join(_frontend_dir, "index.html"), "rb") as f:
+        html = f.read()
+    return html.replace(b"__ASSET_VERSION__", version.encode("ascii"))
+
+
+if os.path.isdir(_frontend_dir):
+    ASSET_VERSION = _compute_asset_version()
+    _INDEX_BYTES = _load_index_bytes(ASSET_VERSION)
+    # ETag 从渲染后的 HTML 字节派生，而非 asset-only ASSET_VERSION：
+    # index.html 变 → _INDEX_BYTES 变；asset 变 → 占位符替换结果变 → _INDEX_BYTES 变。
+    # "HTML 响应内容"和"ETag"严格一一对应，符合 RFC 7232。
+    # 若用 ASSET_VERSION 直接做 ETag，仅改 HTML/CSS 但 asset 不变时 ETag 不变，
+    # 浏览器会持续拿到旧 HTML（Codex 第十轮 F1）。
+    _INDEX_HASH = hashlib.sha256(_INDEX_BYTES).hexdigest()[:10]
+    _INDEX_ETAG = f'"{_INDEX_HASH}"'
+else:
+    ASSET_VERSION = "dev"
+    _INDEX_BYTES = b""
+    _INDEX_HASH = "dev"
+    _INDEX_ETAG = '"dev"'
+
+
+@app.middleware("http")
+async def add_cache_headers(request: Request, call_next):
+    """按路径分流 Cache-Control：
+    - /, *.html → no-cache（必须重验证，配合 ETag 走 304）
+    - /assets/*?v=… → 1 年 immutable（URL 随版本变，永不过期）
+    - /assets/* 无 ?v → 1 小时兜底
+    API 路由不设置，交由调用方或默认行为处理。"""
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith(".html"):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    elif path.startswith("/assets/"):
+        query = request.url.query or ""
+        if "v=" in query:
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
+
+
+@app.api_route("/", methods=["GET", "HEAD"])
+async def serve_index(request: Request):
+    """返回渲染后的 index.html；带 ETag + If-None-Match 的 304 短路。
+    显式覆盖 HEAD：否则会落到 StaticFiles mount、拿到它基于 mtime/size 的
+    32 字符 md5 ETag，与 GET 返回的 10 字符 ASSET_VERSION 不一致，破坏代理缓存键。
+    若 frontend/ 目录不存在（纯 API 模式），退回 JSON 兜底。"""
+    if not _INDEX_BYTES:
+        return {"message": "I-Ching API 已启动。前端页面尚未部署。"}
+    if request.headers.get("if-none-match") == _INDEX_ETAG:
+        return Response(status_code=304, headers={"ETag": _INDEX_ETAG})
+    body = _INDEX_BYTES if request.method == "GET" else b""
+    return Response(
+        content=body,
+        media_type="text/html; charset=utf-8",
+        headers={"ETag": _INDEX_ETAG},
+    )
 
 
 # 挂载静态文件目录（如果存在）

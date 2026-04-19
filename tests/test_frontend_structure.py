@@ -422,14 +422,19 @@ def test_vendor_files_present():
 
 
 def test_script_tags_point_to_local_vendor(html: str):
-    """head 里 marked/dompurify 的 script src 必须是相对路径（本地），不得引用 CDN"""
-    marked_tag = re.search(r'<script\s+src="([^"]+marked[^"]+\.min\.js)"', html)
+    """head 里 marked/dompurify 的 script src 必须是相对路径（本地），不得引用 CDN。
+    src 允许带 ?v=… 查询串（用于缓存破解，含 __ASSET_VERSION__ 占位符）。"""
+    marked_tag = re.search(
+        r'<script\s+src="([^"?]+marked[^"?]+\.min\.js)(?:\?[^"]*)?"', html
+    )
     assert marked_tag, "缺少 marked script 标签"
     assert marked_tag.group(1).startswith("assets/"), (
         f"marked 应从本地加载，实为: {marked_tag.group(1)}"
     )
 
-    dompurify_tag = re.search(r'<script\s+src="([^"]+dompurify[^"]+\.min\.js)"', html)
+    dompurify_tag = re.search(
+        r'<script\s+src="([^"?]+dompurify[^"?]+\.min\.js)(?:\?[^"]*)?"', html
+    )
     assert dompurify_tag, "缺少 dompurify script 标签"
     assert dompurify_tag.group(1).startswith("assets/"), (
         f"dompurify 应从本地加载，实为: {dompurify_tag.group(1)}"

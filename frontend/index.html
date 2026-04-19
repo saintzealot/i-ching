@@ -13,9 +13,9 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500&display=swap" rel="stylesheet">
 <!-- 本地化 vendor：消除 CDN 供应链风险，同时便于 CSP 只放 self -->
-<script src="assets/vendor/marked-15.0.12.min.js"></script>
-<script src="assets/vendor/dompurify-3.1.5.min.js"></script>
-<script src="assets/iching-core.js?v=6"></script>
+<script src="assets/vendor/marked-15.0.12.min.js?v=__ASSET_VERSION__"></script>
+<script src="assets/vendor/dompurify-3.1.5.min.js?v=__ASSET_VERSION__"></script>
+<script src="assets/iching-core.js?v=__ASSET_VERSION__"></script>
 <style>
 /* ========== 基础重置 ========== */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -46,6 +46,7 @@ html, body {
   color: var(--text);
   font-family: var(--font-sans);
   min-height: 100vh;
+  min-height: 100svh;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
@@ -83,13 +84,22 @@ button { touch-action: manipulation; }
 .motes { position: fixed; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; }
 .motes .mote { position: absolute; border-radius: 50%; background: var(--gold); filter: blur(0.5px); }
 
-/* ========== 容器 ========== */
+/* ========== 容器 ==========
+ * flex column + svh：首屏可伸缩区域（.bagua-stage）吸收浏览器高度差异，
+ * compose 区锁底，确保【起卦】按钮在任意机型都在首屏内可见。
+ *
+ * 双声明兜底策略：每处 svh / svh-clamp 之前先写一条 px 或 vh 声明。
+ * 不支持 svh 的浏览器（iOS 15.3-、Chrome 108-）无法解析后者整条会被丢弃，
+ * 保留前者；现代浏览器两条都应用、后者覆盖——CSS 级联天然完成渐进增强。 */
 .app {
   position: relative; z-index: 2;
   max-width: 480px;
   margin: 0 auto;
   padding: calc(env(safe-area-inset-top, 0px) + 20px) 22px calc(env(safe-area-inset-bottom, 0px) + 40px);
   min-height: 100vh;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ========== 顶部元信息 ========== */
@@ -120,28 +130,43 @@ button { touch-action: manipulation; }
 }
 .hero h1 {
   font-family: var(--font-serif);
-  font-size: 52px; font-weight: 500;
+  font-size: 52px;                          /* 兜底：svh/clamp 不识别时生效 */
+  font-size: clamp(40px, 6.4svh, 52px);
+  font-weight: 500;
   line-height: 1; letter-spacing: 4px;
   color: var(--text);
 }
 .hero .tagline {
   font-family: var(--font-serif);
-  font-size: 18px; letter-spacing: 8px;
+  font-size: 18px;                          /* 兜底 */
+  font-size: clamp(15px, 2.2svh, 18px);
+  letter-spacing: 8px;
   color: var(--gold-hi);
   margin-top: 14px; font-style: italic;
   animation: breathe-text 6s ease-in-out infinite;
 }
 
-/* ========== 八卦舞台 ========== */
+/* ========== 八卦舞台 ==========
+ * flex: 0 1 auto：舞台取 .bagua-float 的固有尺寸（clamp 缩放），可被压缩但不扩张——
+ * 不扩张的关键在于：若扩张，会把 compose 区推到屏幕最底、副导航挤出首屏。
+ * 空闲空间自然落在最后一个 flex item 下方（由 .app 的 min-height 撑起），
+ * 视觉上表现为 compose + 副导航紧跟八卦盘，底部留白给安全区，符合仪式感排版。 */
 .bagua-stage {
   position: relative;
   display: flex; align-items: center; justify-content: center;
   margin: 28px 0 20px;
-  height: 340px;
+  flex: 0 1 auto;
+  min-height: 200px;
+  max-height: 340px;
   isolation: isolate;
 }
 .bagua-float {
-  position: relative; width: 260px; height: 260px;
+  position: relative;
+  width: 260px; height: 260px;              /* 兜底：svh/clamp 不识别时保持设计稿尺寸
+                                             * —— 避免老浏览器里 .bagua-svg (width/height:100%)
+                                             *    继承到 auto 导致八卦盘塌陷。 */
+  width: clamp(200px, 32svh, 260px);
+  height: clamp(200px, 32svh, 260px);
   animation: breathe-bagua 7s ease-in-out infinite, float-y 9s ease-in-out infinite;
   transition: opacity 0.5s;
 }
@@ -162,7 +187,7 @@ button { touch-action: manipulation; }
   animation: spin-cw-very-slow 180s linear infinite;
   transform-origin: center;
 }
-.bagua-float .bagua-svg { width: 260px; height: 260px; display: block; }
+.bagua-float .bagua-svg { width: 100%; height: 100%; display: block; }
 .bagua-float .ring {
   position: absolute; border-radius: 50%; pointer-events: none;
 }
@@ -344,7 +369,9 @@ button { touch-action: manipulation; }
   min-height: 56px; border-radius: 2px; border: none; cursor: pointer;
   background: linear-gradient(180deg, var(--gold-hi) 0%, var(--gold) 50%, var(--gold-dim) 100%);
   font-family: var(--font-serif);
-  font-size: 18px; letter-spacing: 12px; font-weight: 600;
+  font-size: 18px;                          /* 兜底 */
+  font-size: clamp(17px, 2.4svh, 19px);
+  letter-spacing: 12px; font-weight: 600;
   color: #1a1208;
   box-shadow: 0 0 30px rgba(201,169,97,0.2), inset 0 1px 0 var(--gold-hi);
   overflow: hidden;
@@ -393,6 +420,7 @@ button { touch-action: manipulation; }
   animation: slide-up 0.4s ease-out;
   /* 顶到底撑满视口（扣除 app padding），形成沉浸界面 */
   min-height: calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 60px);
+  min-height: calc(100svh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 60px);
   flex-direction: column;
 }
 .app.is-shaking .divine-flow { display: flex; }
@@ -623,7 +651,9 @@ button { touch-action: manipulation; }
 }
 .result-head .hex-name {
   font-family: var(--font-serif);
-  font-size: 46px; letter-spacing: 8px; font-weight: 500;
+  font-size: 46px;                          /* 兜底 */
+  font-size: clamp(38px, 5.6svh, 46px);
+  letter-spacing: 8px; font-weight: 500;
   color: var(--text); line-height: 1;
 }
 .result-head .hex-symbol {
@@ -1132,17 +1162,43 @@ button { touch-action: manipulation; }
   to   { opacity: 1; }
 }
 
-/* 响应式 */
+/* 响应式
+ * 两个维度正交：max-width 管窄屏字距留白；max-height 管短屏垂直压缩。
+ * iPhone 12 mini (375×812) 窄不短、SE (375×667) 又窄又短、Pro Max (430×932) 宽且高——
+ * 两个断点独立命中，叠加时自动合并。 */
 @media (max-width: 380px) {
   .app { padding-left: 18px; padding-right: 18px; }
-  .hero h1 { font-size: 44px; letter-spacing: 3px; }
-  .hero .tagline { font-size: 16px; letter-spacing: 6px; }
-  .bagua-stage { height: 300px; }
-  .bagua-float, .bagua-float .bagua-svg { width: 230px; height: 230px; }
-  .cta-divine { min-height: 52px; font-size: 17px; letter-spacing: 10px; }
-  .result-head .hex-name { font-size: 40px; letter-spacing: 6px; }
+  .hero h1 { letter-spacing: 3px; }
+  .hero .tagline { letter-spacing: 6px; }
+  .cta-divine { min-height: 52px; letter-spacing: 10px; }
+  .result-head .hex-name { letter-spacing: 6px; }
   .lookup-grid { grid-template-columns: repeat(3, 1fr); }
   .hexes .col .h-line { width: 86px; }
+}
+
+/* 短屏紧凑模式（tier 1：iPhone 12 mini / 13 mini / XS 等 812px 级）
+ * 温和压缩垂直留白，让副导航入首屏。 */
+@media (max-height: 820px) {
+  .meta-bar { margin-bottom: 16px; }
+  .hero { padding-top: 12px; }
+  .hero .tagline { margin-top: 10px; }
+  .bagua-stage { margin: 18px 0 14px; }
+  .cta-divine { margin-top: 18px; }
+  .lookup { margin-top: 36px; }
+}
+
+/* 短屏紧凑模式（tier 2：iPhone SE / 带地址栏的 Safari 首屏，667-720px 级）
+ * 激进压缩：八卦盘覆盖到 180px，省 ~30px 保证副导航入首屏。 */
+@media (max-height: 720px) {
+  .app { padding-top: calc(env(safe-area-inset-top, 0px) + 8px); }
+  .meta-bar { margin-bottom: 10px; }
+  .hero { padding-top: 4px; }
+  .hero .tagline { margin-top: 6px; }
+  .bagua-stage { margin: 8px 0 6px; max-height: 200px; min-height: 160px; }
+  .bagua-float { width: 180px; height: 180px; }
+  .cta-divine { margin-top: 12px; }
+  .cta-subnav { margin-top: 8px; }
+  .lookup { margin-top: 20px; padding-top: 14px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1336,7 +1392,7 @@ button { touch-action: manipulation; }
   </div>
 </div>
 
-<script src="assets/app.js?v=6"></script>
+<script src="assets/app.js?v=__ASSET_VERSION__"></script>
 
 </body>
 </html>
