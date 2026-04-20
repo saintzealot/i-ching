@@ -1359,3 +1359,12 @@ $('btnHistory').addEventListener('click', openHistory);
   });
 })();
 
+/* 诊断面板按需加载（?debug=scroll）—— 安卓滚动 bug 排查用，正常用户零影响。
+ * 不走 index.html ASSET_VERSION，直接带 Date.now() 保证每次都拿新版，
+ * 方便在真机上验证 A/B 切换效果。 */
+if (location.search.indexOf('debug=scroll') !== -1) {
+  var _sdScript = document.createElement('script');
+  _sdScript.src = 'assets/scroll-debug.js?t=' + Date.now();
+  document.body.appendChild(_sdScript);
+}
+

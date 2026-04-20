@@ -165,6 +165,10 @@ pytest tests/ -v
 - **前端结构（`test_frontend_structure.py`）** — DOM 锚点、关键文案、meta、XSS 配置、安全反模式、函数签名、动画 keyframes、响应式断点
 - **前端纯函数（`test_frontend_js.py`）** — 通过 `node` 子进程加载 `iching-core.js`，测试爻值换变、铜钱布局、拼音映射等纯函数；若本机没有 `node` 会 skip
 
+## 调试工具
+
+**滚动诊断 HUD** —— 给 URL 追加 `?debug=scroll` 可在右下角挂出实时诊断面板：视口单位（vh/svh/dvh）、scrollHeight、overflow/overscroll-behavior 计算值、滚动事件日志环，以及一键 A/B 切换 `overscroll-behavior` / `overflow-x` / `min-height` 的按钮。`[copy]` 按钮把快照导出成 JSON 便于排查。正常用户 URL 不带参数则零影响（脚本不下载、不执行）。
+
 ## 致谢
 
 本项目由 [Claude Code](https://claude.ai/claude-code)、[OpenAI Codex](https://openai.com/codex) 与 [OpenCode](https://opencode.ai) 协同完成，从架构设计、代码实现到部署上线，全程由 AI 辅助开发。

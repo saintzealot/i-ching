@@ -49,8 +49,13 @@ html, body {
   min-height: 100svh;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  overflow-x: hidden;
-  overscroll-behavior: none;
+  /* 横向裁剪已下移到 .app，根节点保持默认。
+   * 原因：html/body 两层 overflow-x: hidden 会让 body 变成独立滚动容器
+   * （双轴规范化后 overflow-y 自动升级为 auto），再叠加 body 上的
+   * overscroll-behavior 就会在安卓 Chrome 上吞手势动量——长内容滑一下就卡。
+   * overscroll-behavior-y: contain 保留（等价于原 `none` 的 pull-to-refresh
+   * 抑制效果，但不夹手势），现在它只作用在 html 单滚动容器上，行为正常。 */
+  overscroll-behavior-y: contain;
 }
 
 button, textarea, input { font-family: inherit; color: inherit; }
@@ -100,6 +105,11 @@ button { touch-action: manipulation; }
   min-height: 100svh;
   display: flex;
   flex-direction: column;
+  /* 横向裁剪从根节点下移到这里，裁剪任何意外的横向溢出（如宽 SVG、nowrap 长文本）。
+   * 用 `hidden` 而非 `clip`：两者视觉一致，hidden 兼容 iOS Safari 15.3 及更老版本，
+   * clip 仅 15.4+。落在 .app（非 html/body）上不触发安卓 Chrome 的 body-scroller
+   * 手势 bug —— 根因是 body 成为独立 scroller，.app 成为 scroller 对根滚动无影响。 */
+  overflow-x: hidden;
 }
 
 /* ========== 顶部元信息 ========== */
