@@ -454,7 +454,7 @@ function appendYaoToHexPreview(lineVal) {
   // 配合 CSS flex-direction: column + justify-content: flex-end 形成自底向上生长
   if (box.firstChild) box.insertBefore(row, box.firstChild);
   else box.appendChild(row);
-  // 下一帧加 .shown 触发淡入过渡
+  // 下一帧加 .shown 触发滑入过渡
   requestAnimationFrame(function () { row.classList.add('shown'); });
 }
 

@@ -475,15 +475,18 @@ button { touch-action: manipulation; }
   align-items: center;
 }
 /* 爻线与结果页 `.hexes .col .h-line` 1:1 对齐：5 段黄铜渐变、同值 inset
- * 金属边、同值 gap、transparent 中段。填充 gap 的两版尝试（暗铜 / 鎏金光）
- * 都被驳回——真正的根因是预览屏的 cosmos/coin halo 衬得 transparent gap 显"抠色"，
- * 而非 gap 本身需要填什么。先对齐第三屏，halo 侧若仍需调整再动。 */
+ * 金属边、同值 gap、transparent 中段。
+ *
+ * 入场动画只走 translateY 滑入，不走 opacity 淡入：
+ *   opacity 淡入会让整个 yao（含 yin 的 transparent gap）在 0.45s 窗口里半透明，
+ *   中间帧 gap 透出黑底被误读为"黑色方块 bug"。实测用户截图都落在此窗口。
+ *   去 opacity 保留仪式感（依然有过渡），代价是不再"淡出虚空"。 */
 .df-hex-preview .hex-yao {
   width: 104px; height: 8px; margin: 2px 0; position: relative; border-radius: 1px;
-  opacity: 0; transform: translateY(-4px);
-  transition: opacity .45s ease-out, transform .45s ease-out;
+  transform: translateY(-4px);
+  transition: transform .45s ease-out;
 }
-.df-hex-preview .hex-yao.shown { opacity: 1; transform: none; }
+.df-hex-preview .hex-yao.shown { transform: none; }
 .df-hex-preview .hex-yao.yang {
   background: linear-gradient(90deg,
     #6b4a1c 0%, #c9a961 18%, #ead29a 50%, #c9a961 82%, #6b4a1c 100%);
