@@ -97,4 +97,8 @@ green "  访问地址: http://localhost:${PORT}"
 green "  按 Ctrl+C 停止"
 green "=========================================="
 
-exec uvicorn backend.main:app --host 0.0.0.0 --port "$PORT" --reload
+# --reload-include 显式覆盖 HTML/CSS/JS：backend/main.py 启动时把 index.html
+# 读入 _INDEX_BYTES 模块级缓存，光改前端文件不会触发 uvicorn 重载（默认只 watch *.py），
+# 导致 dev 循环看到的是启动时那一份老 HTML。加这些 include 让前端改动也触发重启。
+exec uvicorn backend.main:app --host 0.0.0.0 --port "$PORT" --reload \
+  --reload-include "*.html" --reload-include "*.css" --reload-include "*.js"
