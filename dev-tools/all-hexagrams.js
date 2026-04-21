@@ -1,5 +1,5 @@
 /* 64 卦体检页脚本 —— 外部化以通过 CSP script-src 'self'。
- * 页面：frontend/all-hexagrams.html
+ * 页面：dev-tools/all-hexagrams.html（由 backend/main.py 里 DEV_MODE 门控路由暴露）
  * 用途：dev 时把 64 卦静态铺一张大表，配合顶部 panel 对照 halo/背景/gap 变量。
  *
  * HEX_DATA 来源：`backend/hexagrams_data.py` 的 HEXAGRAMS + TRIGRAMS。

@@ -353,6 +353,10 @@ async def ws_interpret(websocket: WebSocket):
 _backend_dir = os.path.dirname(os.path.abspath(__file__))
 _project_root = os.path.dirname(_backend_dir)
 _frontend_dir = os.path.join(_project_root, "frontend")
+# dev-tools/ 故意放在 frontend/ 之外：不被 StaticFiles 扫描，URL 变体
+# （如 %2e 编码、双斜杠）无法通过 path normalization 绕进来。详见 Codex
+# 二轮 review 发现的 `/assets/%2e/all-hexagrams.js` 类 bypass。
+_dev_tools_dir = os.path.join(_project_root, "dev-tools")
 
 # 纳入 hash 计算的资产文件 —— 任一文件内容变则 ASSET_VERSION 变
 _ASSET_FILES = (
@@ -444,20 +448,21 @@ async def serve_index(request: Request):
 
 
 # ============================================================
-# Dev-only 调试页面路由门控
+# Dev-only 调试页面路由门控（双层防御）
 # ------------------------------------------------------------
-# frontend/all-hexagrams.html 是本地 dev 时才用的 64 卦视觉体检页。
-# .dockerignore 排除了镜像，但 git clone + 直跑 uvicorn 的非 Docker
-# 部署（HF Space 以外任何人自行部署）仍会被 StaticFiles mount 暴露。
+# dev-tools/all-hexagrams.{html,js} 是本地 dev 时才用的 64 卦视觉体检页。
 #
-# 所以在 mount 之前挂两条精确路径：env DEV_MODE=1 才返回文件，否则 404。
-# 生产部署（HF Space Dockerfile）不会设置 DEV_MODE，默认 404。
-# ./start.sh 会 export DEV_MODE=1，本地 uvicorn 访问体检页正常。
-# Codex 第 N 轮 adversarial review 采纳。
+# 两层防御：
+#   1. 文件放在 `dev-tools/`（frontend/ 之外），StaticFiles 扫不到；
+#      URL 变体（如 /assets/%2e/...、/%2e/...、//）path normalize 后
+#      最多指到 /all-hexagrams.html 这一根路径——此类变体要么被下面的
+#      精确路由拦截要么落不到磁盘，不会走漏。
+#   2. 精确路由在 app.mount 之前注册，env DEV_MODE=1 才返回文件否则 404。
+#      ./start.sh 会 export DEV_MODE=1；HF Space Dockerfile 不设此变量。
 # ============================================================
 _DEV_ONLY_FILES = {
     "/all-hexagrams.html": ("all-hexagrams.html", "text/html; charset=utf-8"),
-    "/assets/all-hexagrams.js": ("assets/all-hexagrams.js", "application/javascript"),
+    "/all-hexagrams.js": ("all-hexagrams.js", "application/javascript"),
 }
 
 
@@ -466,16 +471,16 @@ async def _serve_dev_all_hexagrams_html():
     return _serve_dev_only("/all-hexagrams.html")
 
 
-@app.get("/assets/all-hexagrams.js", include_in_schema=False)
+@app.get("/all-hexagrams.js", include_in_schema=False)
 async def _serve_dev_all_hexagrams_js():
-    return _serve_dev_only("/assets/all-hexagrams.js")
+    return _serve_dev_only("/all-hexagrams.js")
 
 
 def _serve_dev_only(url_path: str):
     if os.environ.get("DEV_MODE") != "1":
         raise HTTPException(status_code=404)
     rel, mime = _DEV_ONLY_FILES[url_path]
-    full = os.path.join(_frontend_dir, rel)
+    full = os.path.join(_dev_tools_dir, rel)
     if not os.path.isfile(full):
         raise HTTPException(status_code=404)
     return FileResponse(full, media_type=mime)

@@ -7,7 +7,6 @@ __pycache__/
 .git/
 review-minimax/
 
-# dev-only 调试页面：只在本地 uvicorn 下可访问，不应随 Docker 镜像进生产
-# （frontend/ 被 FastAPI StaticFiles 挂到 /，整个目录会被公开）
-frontend/all-hexagrams.html
-frontend/assets/all-hexagrams.js
+# dev-only 调试文件目录：只在本地 uvicorn 下经 DEV_MODE 门控路由访问，
+# 不应随 Docker 镜像进生产（即便不小心设置 DEV_MODE=1 也要拿不到文件）。
+dev-tools/

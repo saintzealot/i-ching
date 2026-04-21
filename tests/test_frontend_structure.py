@@ -1135,7 +1135,7 @@ def test_format_coin_result_exposed_in_core(core_js: str):
 
 
 def test_all_hexagrams_page_hex_data_matches_backend():
-    """frontend/assets/all-hexagrams.js 的 HEX_DATA 必须和 backend HEXAGRAMS 严格一致。
+    """dev-tools/all-hexagrams.js 的 HEX_DATA 必须和 backend HEXAGRAMS 严格一致。
 
     曾经踩坑（Codex adversarial review 指出）：HEX_DATA 是为体检页手动导出的硬编码，
     导出脚本把 TRIGRAMS binary `(bottom, middle, top)` 当成 `(top, middle, bottom)` 读，
@@ -1146,7 +1146,7 @@ def test_all_hexagrams_page_hex_data_matches_backend():
     import json
     from backend.hexagrams_data import HEXAGRAMS, TRIGRAMS
 
-    js_path = ROOT / "frontend" / "assets" / "all-hexagrams.js"
+    js_path = ROOT / "dev-tools" / "all-hexagrams.js"
     assert js_path.exists(), f"{js_path} 不存在（体检页脚本被意外删了？）"
     js = js_path.read_text(encoding="utf-8")
 

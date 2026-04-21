@@ -121,14 +121,16 @@ def test_api_endpoint_also_has_csp(client):
 
 @pytest.mark.parametrize(
     "url",
-    ["/all-hexagrams.html", "/assets/all-hexagrams.js"],
+    ["/all-hexagrams.html", "/all-hexagrams.js"],
 )
 def test_dev_only_paths_return_404_without_dev_mode(client, monkeypatch, url):
-    """frontend/all-hexagrams.* 是本地体检页，生产部署（HF Space Docker 或
+    """dev-tools/all-hexagrams.* 是本地体检页，生产部署（HF Space Docker 或
     任何未显式设置 DEV_MODE 的部署）必须 404。
 
-    Codex adversarial review 指出：.dockerignore 只治 Docker；非 Docker
-    部署仍经过 StaticFiles 服务该文件。所以 backend 要在 app-level 加门控。
+    Codex 二轮 adversarial review 指出：.dockerignore 只治 Docker；非
+    Docker 部署仍经过 StaticFiles。Codex 三轮进一步发现精确路由可以被
+    URL 变体（%2e 编码、双斜杠等）绕过——所以把文件彻底移出 frontend/
+    mount 路径，同时保留精确路由的 DEV_MODE 门控。
     """
     monkeypatch.delenv("DEV_MODE", raising=False)
     r = client.get(url)
@@ -137,13 +139,56 @@ def test_dev_only_paths_return_404_without_dev_mode(client, monkeypatch, url):
 
 @pytest.mark.parametrize(
     "url",
-    ["/all-hexagrams.html", "/assets/all-hexagrams.js"],
+    ["/all-hexagrams.html", "/all-hexagrams.js"],
 )
 def test_dev_only_paths_served_when_dev_mode_set(client, monkeypatch, url):
     """DEV_MODE=1 时路由放行；文件在磁盘上则返回 200，文件不存在返回 404。
-    （Docker 镜像里 .dockerignore 已删除该文件，即使误设 DEV_MODE 也拿不到内容）"""
+    （Docker 镜像里 .dockerignore 已删除整个 dev-tools/ 目录，即使误设
+    DEV_MODE 也拿不到内容）"""
     monkeypatch.setenv("DEV_MODE", "1")
     r = client.get(url)
     assert r.status_code in (200, 404), (
         f"{url} 在 DEV_MODE=1 下应返回 200（文件存在）或 404（文件缺），实际 {r.status_code}"
+    )
+
+
+# URL 变体 bypass 回归测试——Codex 三轮 adversarial review 发现：
+# 原来 /all-hexagrams.html 和 /assets/all-hexagrams.js 在 frontend/ 下，
+# StaticFiles mount normalize `/assets/%2e/all-hexagrams.js`、
+# `/%2e/all-hexagrams.html`、`/assets//all-hexagrams.js` 等变体后能指到磁盘文件，
+# 绕过了精确路由的 DEV_MODE 门控。修法是把文件移到 dev-tools/ 目录（不在 mount 范围内），
+# 这样任何 URL 变体 normalize 后落到 frontend/ 都指不到文件，必定 404。
+_BYPASS_VARIANTS = [
+    # Codex 三轮 review 直接指出的四个 URL 变体——修前 frontend/ 时都能命中
+    # StaticFiles、拿到文件；修后 dev-tools/ 下任何 normalize 都落空。
+    "/assets/%2e/all-hexagrams.js",
+    "/assets/%2e%2e/assets/all-hexagrams.js",
+    "/assets//all-hexagrams.js",
+    "/%2e/all-hexagrams.html",
+    # 旧的 /assets/... 精确路径已作废，也不应再生效
+    "/assets/all-hexagrams.js",
+    # 注意：`//all-hexagrams.html`（双前导斜杠）不在列表里——TestClient
+    # 会把它归一到 root `/`，命中 serve_index 返回主页 index.html（公开资源），
+    # 不算 dev 页泄露。如果想覆盖这类，要断言"响应体不含 dev 页指纹"，
+    # 比纯看 status 更精确，但当前 4 个变体已覆盖 Codex 报告的全部真泄露点。
+]
+
+
+@pytest.mark.parametrize("url", _BYPASS_VARIANTS)
+def test_dev_only_bypass_variants_blocked_without_dev_mode(client, monkeypatch, url):
+    """无 DEV_MODE 时，所有已知变体都必须 404（不能泄露体检页内容）"""
+    monkeypatch.delenv("DEV_MODE", raising=False)
+    r = client.get(url)
+    assert r.status_code == 404, f"{url} 在无 DEV_MODE 时必须 404，实际 {r.status_code}"
+
+
+@pytest.mark.parametrize("url", _BYPASS_VARIANTS)
+def test_dev_only_bypass_variants_blocked_even_with_dev_mode(client, monkeypatch, url):
+    """关键：即便 DEV_MODE=1，URL 变体也不应能通过 StaticFiles 拿到体检页内容。
+    （体检页文件已从 frontend/ 搬走，StaticFiles 扫不到；精确路由只认
+    `/all-hexagrams.html` 和 `/all-hexagrams.js`。）"""
+    monkeypatch.setenv("DEV_MODE", "1")
+    r = client.get(url)
+    assert r.status_code == 404, (
+        f"{url} 即便 DEV_MODE=1 也必须 404（防 URL 变体绕过），实际 {r.status_code}"
     )
