@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>64 卦体检 · I-Ching dev</title>
+<style>
+  :root {
+    --bg-page: #050a08;
+    --bg-deep: #0a1612;
+    --text: #e8d9b8;
+    --text-dim: #8a7a5a;
+    --gold: #c9a961;
+    --gold-dim: #8a6b33;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif;
+    background: var(--bg-page); min-height: 100vh;
+  }
+  body.bg-cosmos {
+    background:
+      radial-gradient(ellipse at 50% 35%, var(--bg-deep) 0%, #050a08 55%, #020604 100%);
+  }
+  body.bg-grey { background: #151515; }
+
+  /* 控制面板 */
+  .panel {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(0,0,0,0.85);
+    backdrop-filter: blur(12px);
+    padding: 10px 16px; border-bottom: 1px solid #222;
+    display: flex; flex-wrap: wrap; gap: 18px; align-items: center;
+    font-size: 12px;
+  }
+  .panel .group { display: flex; gap: 4px; align-items: center; }
+  .panel label { color: var(--text-dim); margin-right: 6px; font-size: 11px; }
+  .panel button {
+    padding: 4px 10px; background: transparent; color: var(--text);
+    border: 1px solid #333; border-radius: 3px; cursor: pointer;
+    font-size: 11px; font-family: inherit;
+  }
+  .panel button:hover { border-color: #555; }
+  .panel button.active {
+    background: var(--gold-dim); color: #1a0f00;
+    border-color: var(--gold); font-weight: 600;
+  }
+
+  /* Halo 层：默认隐藏，只在对应 body class 下显示 */
+  .halo {
+    position: fixed; left: 50%; top: 50%;
+    width: 420px; height: 420px; margin: -210px 0 0 -210px;
+    border-radius: 50%; pointer-events: none; z-index: 1;
+    display: none;
+  }
+  body.cosmos-low .halo.cosmos,
+  body.cosmos-high .halo.cosmos,
+  body.coin-low .halo.coin,
+  body.coin-high .halo.coin { display: block; }
+
+  .halo.cosmos { filter: blur(24px); top: 35%; }
+  body.cosmos-low  .halo.cosmos { background: radial-gradient(circle, rgba(201,169,97,0.18) 0%, transparent 62%); }
+  body.cosmos-high .halo.cosmos { background: radial-gradient(circle, rgba(201,169,97,0.30) 0%, transparent 62%); }
+
+  .halo.coin { filter: blur(22px); top: 65%; }
+  body.coin-low  .halo.coin { background: radial-gradient(circle, rgba(201,169,97,0.14) 0%, transparent 60%); }
+  body.coin-high .halo.coin { background: radial-gradient(circle, rgba(201,169,97,0.22) 0%, transparent 60%); }
+
+  /* 网格：桌面 8 列，窄屏 4 列 */
+  .grid {
+    position: relative; z-index: 2;
+    display: grid; grid-template-columns: repeat(8, 1fr);
+    gap: 24px 12px; padding: 24px 16px;
+    max-width: 1200px; margin: 0 auto;
+  }
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: repeat(4, 1fr); }
+  }
+  @media (max-width: 500px) {
+    .grid { grid-template-columns: repeat(3, 1fr); gap: 20px 8px; }
+  }
+
+  .hex-card { text-align: center; }
+  .hex-card .num {
+    font-size: 10px; color: var(--text-dim); letter-spacing: 1.5px;
+    margin-top: 6px;
+  }
+  .hex-card .name {
+    font-family: 'SimSun', 'Songti SC', serif;
+    font-size: 14px; color: var(--text); margin-top: 4px;
+    letter-spacing: 2px;
+  }
+
+  /* 爻线（严格 copy frontend/index.html `.hexes .col .h-line` + .yin 重构版）*/
+  .lines {
+    display: inline-flex; flex-direction: column-reverse; gap: 6px;
+  }
+  .h-line {
+    width: 86px; height: 8px; position: relative; border-radius: 1px;
+    background: linear-gradient(90deg,
+      #6b4a1c 0%, #c9a961 18%, #ead29a 50%, #c9a961 82%, #6b4a1c 100%);
+    box-shadow: inset 0 1px 0 rgba(255,220,160,0.22),
+                inset 0 -1px 0 rgba(0,0,0,0.35);
+  }
+  .h-line.yin {
+    /* B 方案 substrate 当前版：暗铜垂直渐变 + inset top shadow */
+    background: linear-gradient(180deg,
+      #2a1d10 0%, #4a3520 50%, #2a1d10 100%);
+    box-shadow: inset 0 1px 1px rgba(0,0,0,0.45);
+    display: flex; gap: 18px;
+  }
+  .h-line.yin::before,
+  .h-line.yin::after {
+    content: ""; flex: 1; height: 100%; border-radius: 1px;
+    background: linear-gradient(90deg,
+      #6b4a1c 0%, #c9a961 22%, #ead29a 50%, #c9a961 78%, #6b4a1c 100%);
+    box-shadow: inset 0 1px 0 rgba(255,220,160,0.22),
+                inset 0 -1px 0 rgba(0,0,0,0.35);
+  }
+
+  /* 对照模式：恢复原始 transparent gap，查看未修复前的样子 */
+  body.gap-transparent .h-line.yin {
+    background: transparent;
+    box-shadow: none;
+  }
+
+  /* sibling 版 yin：JS 往每个 yin 塞两个 .yin-half 子 div。
+   * 默认隐藏（使用 ::before/::after 版本），开关打开时显示 + 隐藏 pseudo。
+   * 视觉预期：与 ::before/::after 版本每像素一致——用来证明 DOM 结构不影响渲染。 */
+  .h-line.yin .yin-half { display: none; }
+  body.yin-sibling .h-line.yin::before,
+  body.yin-sibling .h-line.yin::after { content: none; }
+  body.yin-sibling .h-line.yin .yin-half {
+    display: block; flex: 1; height: 100%; border-radius: 1px;
+    background: linear-gradient(90deg,
+      #6b4a1c 0%, #c9a961 22%, #ead29a 50%, #c9a961 78%, #6b4a1c 100%);
+    box-shadow: inset 0 1px 0 rgba(255,220,160,0.22),
+                inset 0 -1px 0 rgba(0,0,0,0.35);
+  }
+
+  /* 高亮"重灾户"（4+ 阴连排）*/
+  body.flag-dense .hex-card.dense-yin {
+    outline: 1px solid rgba(200,90,90,0.4);
+    outline-offset: 4px;
+    border-radius: 2px;
+  }
+
+  .footer {
+    text-align: center; padding: 24px; color: var(--text-dim);
+    font-size: 11px; position: relative; z-index: 2;
+  }
+</style>
+</head>
+<body>
+
+<div class="halo cosmos"></div>
+<div class="halo coin"></div>
+
+<div class="panel">
+  <div class="group">
+    <label>背景</label>
+    <button data-group="bg" data-value="black" class="active">纯黑</button>
+    <button data-group="bg" data-value="cosmos">星幕</button>
+    <button data-group="bg" data-value="grey">中灰</button>
+  </div>
+  <div class="group">
+    <label>Cosmos halo</label>
+    <button data-group="cosmos" data-value="off" class="active">关</button>
+    <button data-group="cosmos" data-value="low">0.18</button>
+    <button data-group="cosmos" data-value="high">0.30</button>
+  </div>
+  <div class="group">
+    <label>Coin halo</label>
+    <button data-group="coin" data-value="off" class="active">关</button>
+    <button data-group="coin" data-value="low">0.14</button>
+    <button data-group="coin" data-value="high">0.22</button>
+  </div>
+  <div class="group">
+    <label>Gap</label>
+    <button data-group="gap" data-value="fill" class="active">填色 (B)</button>
+    <button data-group="gap" data-value="transparent">原版 transparent</button>
+  </div>
+  <div class="group">
+    <label>Yin 结构</label>
+    <button data-group="sibling" data-value="off" class="active">::before/::after (当前)</button>
+    <button data-group="sibling" data-value="on">两个 sibling div</button>
+  </div>
+  <div class="group">
+    <label>标记</label>
+    <button data-group="flag" data-value="off" class="active">关</button>
+    <button data-group="flag" data-value="dense">圈 4+ 连阴</button>
+  </div>
+</div>
+
+<div class="grid" id="grid"></div>
+
+<div class="footer">
+  64 卦体检页 · dev only · 爻线 CSS 与结果页 <code>.hexes .col .h-line</code> 1:1 对齐
+</div>
+
+<script src="assets/all-hexagrams.js"></script>
+
+</body>
+</html>
