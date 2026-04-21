@@ -97,6 +97,10 @@ green "  访问地址: http://localhost:${PORT}"
 green "  按 Ctrl+C 停止"
 green "=========================================="
 
+# DEV_MODE=1 开放 dev-only 调试页面路由（/all-hexagrams.html 等）。
+# 生产部署（HF Space Dockerfile）不设此变量，对应路径默认 404。
+export DEV_MODE=1
+
 # --reload-include 显式覆盖 HTML/CSS/JS：backend/main.py 启动时把 index.html
 # 读入 _INDEX_BYTES 模块级缓存，光改前端文件不会触发 uvicorn 重载（默认只 watch *.py），
 # 导致 dev 循环看到的是启动时那一份老 HTML。加这些 include 让前端改动也触发重启。

@@ -112,3 +112,38 @@ def test_api_endpoint_also_has_csp(client):
     assert r.status_code == 200
     assert "content-security-policy" in r.headers
     assert r.headers.get("x-frame-options") == "DENY"
+
+
+# ============================================================
+# Dev-only 调试页面在非 DEV_MODE 下必须 404
+# ============================================================
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["/all-hexagrams.html", "/assets/all-hexagrams.js"],
+)
+def test_dev_only_paths_return_404_without_dev_mode(client, monkeypatch, url):
+    """frontend/all-hexagrams.* 是本地体检页，生产部署（HF Space Docker 或
+    任何未显式设置 DEV_MODE 的部署）必须 404。
+
+    Codex adversarial review 指出：.dockerignore 只治 Docker；非 Docker
+    部署仍经过 StaticFiles 服务该文件。所以 backend 要在 app-level 加门控。
+    """
+    monkeypatch.delenv("DEV_MODE", raising=False)
+    r = client.get(url)
+    assert r.status_code == 404, f"{url} 在无 DEV_MODE 时必须 404，实际 {r.status_code}"
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["/all-hexagrams.html", "/assets/all-hexagrams.js"],
+)
+def test_dev_only_paths_served_when_dev_mode_set(client, monkeypatch, url):
+    """DEV_MODE=1 时路由放行；文件在磁盘上则返回 200，文件不存在返回 404。
+    （Docker 镜像里 .dockerignore 已删除该文件，即使误设 DEV_MODE 也拿不到内容）"""
+    monkeypatch.setenv("DEV_MODE", "1")
+    r = client.get(url)
+    assert r.status_code in (200, 404), (
+        f"{url} 在 DEV_MODE=1 下应返回 200（文件存在）或 404（文件缺），实际 {r.status_code}"
+    )

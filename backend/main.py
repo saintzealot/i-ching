@@ -14,7 +14,7 @@ import hashlib
 from collections import defaultdict
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from openai import AsyncOpenAI
@@ -441,6 +441,44 @@ async def serve_index(request: Request):
         media_type="text/html; charset=utf-8",
         headers={"ETag": _INDEX_ETAG},
     )
+
+
+# ============================================================
+# Dev-only 调试页面路由门控
+# ------------------------------------------------------------
+# frontend/all-hexagrams.html 是本地 dev 时才用的 64 卦视觉体检页。
+# .dockerignore 排除了镜像，但 git clone + 直跑 uvicorn 的非 Docker
+# 部署（HF Space 以外任何人自行部署）仍会被 StaticFiles mount 暴露。
+#
+# 所以在 mount 之前挂两条精确路径：env DEV_MODE=1 才返回文件，否则 404。
+# 生产部署（HF Space Dockerfile）不会设置 DEV_MODE，默认 404。
+# ./start.sh 会 export DEV_MODE=1，本地 uvicorn 访问体检页正常。
+# Codex 第 N 轮 adversarial review 采纳。
+# ============================================================
+_DEV_ONLY_FILES = {
+    "/all-hexagrams.html": ("all-hexagrams.html", "text/html; charset=utf-8"),
+    "/assets/all-hexagrams.js": ("assets/all-hexagrams.js", "application/javascript"),
+}
+
+
+@app.get("/all-hexagrams.html", include_in_schema=False)
+async def _serve_dev_all_hexagrams_html():
+    return _serve_dev_only("/all-hexagrams.html")
+
+
+@app.get("/assets/all-hexagrams.js", include_in_schema=False)
+async def _serve_dev_all_hexagrams_js():
+    return _serve_dev_only("/assets/all-hexagrams.js")
+
+
+def _serve_dev_only(url_path: str):
+    if os.environ.get("DEV_MODE") != "1":
+        raise HTTPException(status_code=404)
+    rel, mime = _DEV_ONLY_FILES[url_path]
+    full = os.path.join(_frontend_dir, rel)
+    if not os.path.isfile(full):
+        raise HTTPException(status_code=404)
+    return FileResponse(full, media_type=mime)
 
 
 # 挂载静态文件目录（如果存在）
