@@ -43,8 +43,8 @@ i-ching/
 │   ├── main.py              # FastAPI 应用 & API 路由 & WebSocket
 │   ├── divination.py        # 铜钱法算卦核心算法
 │   ├── hexagrams_data.py    # 六十四卦 & 八卦完整数据
-│   ├── requirements.txt     # Python 依赖（直接依赖 + 版本约束）
-│   └── requirements.lock    # 传递依赖锁文件（含 sha256，可复现构建）
+│   ├── requirements.txt     # Python 依赖（直接依赖 + 版本约束，生产安装源）
+│   └── requirements.lock    # 锁文件（含 sha256，仅本地复现 + 审计基线，不进生产）
 ├── frontend/
 │   ├── index.html              # 单页前端应用（墨玉鎏金视觉方向）
 │   └── assets/
@@ -89,7 +89,7 @@ source .venv/bin/activate
 # 2. 安装依赖
 uv pip install -r backend/requirements.txt   # 或 pip install -r backend/requirements.txt
 
-# 可选：精确复现构建环境（锁定所有传递依赖 + 哈希校验）
+# 可选：精确复现本地开发环境（审计基线，HF 部署走 requirements.txt 自动跟安全 patch）
 # uv pip sync backend/requirements.lock
 # 或 pip install --require-hashes -r backend/requirements.lock
 
