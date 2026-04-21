@@ -6,3 +6,8 @@ __pycache__/
 .claude/
 .git/
 review-minimax/
+
+# dev-only 调试页面：只在本地 uvicorn 下可访问，不应随 Docker 镜像进生产
+# （frontend/ 被 FastAPI StaticFiles 挂到 /，整个目录会被公开）
+frontend/all-hexagrams.html
+frontend/assets/all-hexagrams.js
