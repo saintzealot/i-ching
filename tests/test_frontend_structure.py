@@ -1132,3 +1132,52 @@ def test_start_divine_populates_coin_result_and_hex_preview(app_js: str):
 def test_format_coin_result_exposed_in_core(core_js: str):
     """formatCoinResult 应作为纯函数暴露在 iching-core.js"""
     assert "formatCoinResult" in core_js, "iching-core.js 需导出 formatCoinResult"
+
+
+def test_all_hexagrams_page_hex_data_matches_backend():
+    """frontend/assets/all-hexagrams.js 的 HEX_DATA 必须和 backend HEXAGRAMS 严格一致。
+
+    曾经踩坑（Codex adversarial review 指出）：HEX_DATA 是为体检页手动导出的硬编码，
+    导出脚本把 TRIGRAMS binary `(bottom, middle, top)` 当成 `(top, middle, bottom)` 读，
+    导致 48/64 卦 yao 上下反转——名字对、形状错，让体检页得出的视觉结论全部污染。
+
+    这条测试是防线：任何人改 backend 数据或 JS 硬编码，只要不同步两边就立刻炸出。
+    """
+    import json
+    from backend.hexagrams_data import HEXAGRAMS, TRIGRAMS
+
+    js_path = ROOT / "frontend" / "assets" / "all-hexagrams.js"
+    assert js_path.exists(), f"{js_path} 不存在（体检页脚本被意外删了？）"
+    js = js_path.read_text(encoding="utf-8")
+
+    # 抓 const HEX_DATA = [ ... ]; 里的数组字面量
+    m = re.search(r"const\s+HEX_DATA\s*=\s*(\[.*?\]);", js, re.S)
+    assert m, "all-hexagrams.js 必须有 `const HEX_DATA = [ ... ];` 数组字面量"
+    js_data = json.loads(m.group(1))  # JSON.parse — 依赖字面量是严格 JSON 格式
+
+    assert len(js_data) == 64, f"HEX_DATA 必须恰好 64 卦，实际 {len(js_data)}"
+    assert len(HEXAGRAMS) == 64, "backend HEXAGRAMS 意外不是 64 个"
+
+    mismatches = []
+    for js_entry, py_entry in zip(js_data, HEXAGRAMS):
+        n = py_entry["number"]
+        name = py_entry["name"]
+        lower = TRIGRAMS[py_entry["lower_trigram"]]["binary"]
+        upper = TRIGRAMS[py_entry["upper_trigram"]]["binary"]
+        # binary = (bottom, middle, top)；yaos 自底向上：yao1..yao3=下卦底/中/顶, yao4..yao6=上卦底/中/顶
+        expected_yaos = [lower[0], lower[1], lower[2], upper[0], upper[1], upper[2]]
+
+        assert js_entry["n"] == n, f"序号错位：JS #{js_entry['n']} vs Python #{n}"
+        assert js_entry["name"] == name, (
+            f"卦名错位：#{n} JS={js_entry['name']!r} vs Python={name!r}"
+        )
+        if js_entry["yaos"] != expected_yaos:
+            mismatches.append(
+                f"#{n} {name}: JS yaos={js_entry['yaos']} vs expected={expected_yaos}"
+            )
+
+    assert not mismatches, (
+        f"HEX_DATA 和 backend 不一致（{len(mismatches)}/64）：\n"
+        + "\n".join(mismatches[:10])
+        + ("\n..." if len(mismatches) > 10 else "")
+    )
