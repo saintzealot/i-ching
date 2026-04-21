@@ -90,8 +90,9 @@ def test_has_noto_serif_sc(html: str):
 
 
 def test_loads_marked_and_core_js(html: str):
-    # marked 已本地化为 assets/vendor/marked-<version>.min.js
-    assert re.search(r"marked-[\d.]+\.min\.js", html), "缺少 marked 脚本引用"
+    # marked 已本地化为 assets/vendor/marked-<version>.<min|umd>.js
+    # marked 17+ 的 npm 包不再预压缩，我们直接 vendor 未压缩的 .umd.js（SRI 稳定）
+    assert re.search(r"marked-[\d.]+\.(min|umd)\.js", html), "缺少 marked 脚本引用"
     assert "assets/iching-core.js" in html
 
 
@@ -412,10 +413,9 @@ VENDOR_DIR = ROOT / "frontend" / "assets" / "vendor"
 
 
 def test_vendor_files_present():
-    """marked 和 DOMPurify 已下载到本地，消除 CDN 供应链风险"""
-    assert list(VENDOR_DIR.glob("marked-*.min.js")), (
-        f"缺少本地 marked 文件: {VENDOR_DIR}"
-    )
+    """marked 和 DOMPurify 已下载到本地，消除 CDN 供应链风险。
+    marked 18+ 的 npm 包不再发 pre-minified 版本，允许 .umd.js 后缀。"""
+    assert list(VENDOR_DIR.glob("marked-*.js")), f"缺少本地 marked 文件: {VENDOR_DIR}"
     assert list(VENDOR_DIR.glob("dompurify-*.min.js")), (
         f"缺少本地 dompurify 文件: {VENDOR_DIR}"
     )
@@ -423,9 +423,10 @@ def test_vendor_files_present():
 
 def test_script_tags_point_to_local_vendor(html: str):
     """head 里 marked/dompurify 的 script src 必须是相对路径（本地），不得引用 CDN。
-    src 允许带 ?v=… 查询串（用于缓存破解，含 __ASSET_VERSION__ 占位符）。"""
+    src 允许带 ?v=… 查询串（用于缓存破解，含 __ASSET_VERSION__ 占位符）。
+    marked 文件后缀允许 .min.js 或 .umd.js（marked 18+ 的 npm 包不再预压缩）。"""
     marked_tag = re.search(
-        r'<script\s+src="([^"?]+marked[^"?]+\.min\.js)(?:\?[^"]*)?"', html
+        r'<script\s+src="([^"?]+marked[^"?]+\.(?:min|umd)\.js)(?:\?[^"]*)?"', html
     )
     assert marked_tag, "缺少 marked script 标签"
     assert marked_tag.group(1).startswith("assets/"), (
@@ -438,6 +439,33 @@ def test_script_tags_point_to_local_vendor(html: str):
     assert dompurify_tag, "缺少 dompurify script 标签"
     assert dompurify_tag.group(1).startswith("assets/"), (
         f"dompurify 应从本地加载，实为: {dompurify_tag.group(1)}"
+    )
+
+
+def test_vendor_scripts_have_sri_integrity(html: str):
+    """vendor 脚本必须携带 SRI integrity= 哈希（supply-chain tripwire）。
+    任何 byte 改动会让浏览器拒绝执行，迫使升级路径同步更新哈希。"""
+    pattern = (
+        r'<script\s+src="assets/vendor/[^"]+\.js[^"]*"'
+        r'\s+integrity="sha384-[A-Za-z0-9+/=]+"'
+    )
+    matches = re.findall(pattern, html, re.DOTALL)
+    assert len(matches) >= 2, (
+        f"应有 2 个带 SRI integrity 的 vendor script（marked + dompurify），"
+        f"实际匹配 {len(matches)}"
+    )
+
+
+def test_vendor_scripts_have_crossorigin_anonymous(html: str):
+    """SRI 标准要求 crossorigin= 属性存在（尽管同源不触发 CORS，
+    `anonymous` 是规范推荐值）。"""
+    pattern = (
+        r'<script\s+src="assets/vendor/[^"]+\.js[^"]*"'
+        r'[^>]*crossorigin="anonymous"'
+    )
+    matches = re.findall(pattern, html, re.DOTALL)
+    assert len(matches) >= 2, (
+        f'应有 2 个带 crossorigin="anonymous" 的 vendor script，实际匹配 {len(matches)}'
     )
 
 

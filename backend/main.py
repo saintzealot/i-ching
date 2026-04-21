@@ -362,8 +362,8 @@ _dev_tools_dir = os.path.join(_project_root, "dev-tools")
 _ASSET_FILES = (
     "assets/app.js",
     "assets/iching-core.js",
-    "assets/vendor/marked-15.0.12.min.js",
-    "assets/vendor/dompurify-3.1.5.min.js",
+    "assets/vendor/marked-18.0.2.umd.js",
+    "assets/vendor/dompurify-3.4.0.min.js",
     # scroll-debug.js 故意不在此列表：它是 ?debug=scroll 才注入的调试工具，
     # 改动它不应该 bump 生产版本戳、让正常用户缓存穿透。
     # 调试脚本的 cache bust 由 app.js bootstrap 里的 `?t=${Date.now()}` 独立处理。

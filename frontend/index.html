@@ -12,9 +12,15 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500&display=swap" rel="stylesheet">
-<!-- 本地化 vendor：消除 CDN 供应链风险，同时便于 CSP 只放 self -->
-<script src="assets/vendor/marked-15.0.12.min.js?v=__ASSET_VERSION__"></script>
-<script src="assets/vendor/dompurify-3.1.5.min.js?v=__ASSET_VERSION__"></script>
+<!-- 本地化 vendor：消除 CDN 供应链风险，同时便于 CSP 只放 self。
+     integrity= 是对本地文件的完整性加固——任何文件 byte 改动会让浏览器拒绝执行，
+     起到"改 vendor 必须同步更新哈希"的 tripwire 作用。 -->
+<script src="assets/vendor/marked-18.0.2.umd.js?v=__ASSET_VERSION__"
+        integrity="sha384-7AnLEKZ+m8uFTgZ3D3njjhz/8KRCyH9OpRs5gJwID3vGDxmSHXvmn/2LnegrLjuT"
+        crossorigin="anonymous"></script>
+<script src="assets/vendor/dompurify-3.4.0.min.js?v=__ASSET_VERSION__"
+        integrity="sha384-lExbHoPFNjOW+xMze1tJWzpODN3bi/yx3zhbwRoZWaIYxjl89HxJcI2BxPTNa9M7"
+        crossorigin="anonymous"></script>
 <script src="assets/iching-core.js?v=__ASSET_VERSION__"></script>
 <style>
 /* ========== 基础重置 ========== */
