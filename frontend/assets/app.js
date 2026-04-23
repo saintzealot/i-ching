@@ -511,15 +511,13 @@ function coinsEnterShake() {
  *   opts.entering=true → 同时加 .entering 瞬态类，CSS 里 @keyframes holding-enter
  *     跑一次 500ms 把铜钱从"无"（opacity 0 / scale 0.82 / blur 10px）渐显到
  *     HOLD 稳态（0.82 / 0.94 / 6px）。520ms 后清除 .entering 让稳态 animation
- *     (coin-breathe + coin-hold-drift) 接手。用于后续爻（idx > 0）入场。
- *   不传参数 → 只做 shaking/just-landed/gathering → holding 的 class 切换
- *     （coinsEnterSandGather 跑完 800ms 后调此函数不传 entering，把 .gathering
- *      换成 .holding 交棒到稳态 animation）。 */
+ *     (coin-breathe + coin-hold-drift) 接手。
+ *   不传参数 → 只做 shaking/just-landed → holding 的 class 切换（用于非入场路径）。 */
 function coinsEnterHold(opts) {
   var entering = !!(opts && opts.entering);
   var wraps = $('coinsRow').querySelectorAll('.coin-wrap');
   for (var i = 0; i < wraps.length; i++) {
-    wraps[i].classList.remove('shaking', 'just-landed', 'gathering');
+    wraps[i].classList.remove('shaking', 'just-landed');
     wraps[i].classList.add('holding');
     if (entering) wraps[i].classList.add('entering');
   }
@@ -528,26 +526,6 @@ function coinsEnterHold(opts) {
       var ws = $('coinsRow').querySelectorAll('.coin-wrap.entering');
       for (var j = 0; j < ws.length; j++) ws[j].classList.remove('entering');
     }, 520);
-  }
-}
-
-/* 手摇模式首爻（idx === 0）入场仪式 —— 金砂聚合 800ms。
- * 走独立 .gathering 类而非复用 .entering：沙聚合叙事（多层 radial-gradient
- * 云从分散汇聚到中心）和 holding-enter 的 blur/scale fade-in 视觉语言不同，
- * 独立类让 CSS 规则清晰、测试可断言、将来要改动互不串扰。
- *
- * 调用后 800ms 内 sand-converge + coin-crystallize 两组 keyframes 并行跑完，
- * coin-crystallize 末帧（opacity 0.82 / scale 0.94 / blur 6px / translate
- * -1.5px 0.5px）逐字对齐 .coin-wrap.holding 稳态，保证切 .holding 时无跳帧。
- *
- * 不用 animationend 监听 —— sleep(800) 简单稳定，兜底 timeout 不会比 css
- * 动画更晚（浏览器不跑满 animation-duration 是 spec 允许的，监听器反而可能
- * 漏事件）。 */
-function coinsEnterSandGather() {
-  var wraps = $('coinsRow').querySelectorAll('.coin-wrap');
-  for (var i = 0; i < wraps.length; i++) {
-    wraps[i].classList.remove('shaking', 'just-landed', 'holding', 'entering');
-    wraps[i].classList.add('gathering');
   }
 }
 
@@ -814,22 +792,9 @@ async function startDivine() {
       if (divineMode === 'manual') {
         setTossPhase('hold');
         renderCoins(shakingFaces, Date.now() + idx, false);
-        if (idx === 0) {
-          // 首爻仪式感：金砂聚合 800ms —— 沙云从分散汇聚到中心凝结成硬币
-          // 本体，完成后硬币稳态数值（scale 0.94 / opacity 0.82 / blur 6px /
-          // translate -1.5px 0.5px）由 coin-crystallize keyframes 100% 末帧
-          // 精确对齐 .coin-wrap.holding .coin-spin，切稳态无跳帧。
-          coinsEnterSandGather();
-          $('tossHint').textContent = '金砂成形…';
-          await sleep(800);
-          checkpoint();
-          coinsEnterHold();  // 不带 entering：移除 .gathering 加 .holding，走稳态
-        } else {
-          // 后续爻：continue with 500ms holding-enter fade-in（与之前一致，
-          // 沙聚合只是首爻的仪式入场，不在每爻重跑以免拖慢节奏）。
-          coinsEnterHold({ entering: true });
-        }
-        $('tossHint').textContent = _motionSupported
+        // entering:true 触发 500ms 渐显动画，消除"铜钱突然冒出"的闪帧。
+        coinsEnterHold({ entering: true });
+        $('tossHint').textContent = _motionEverFired
           ? '持铜钱 · 轻摇可得一爻'
           : '持铜钱 · 摇手机或点击铜钱';
       } else {
