@@ -511,21 +511,73 @@ function coinsEnterShake() {
  *   opts.entering=true → 同时加 .entering 瞬态类，CSS 里 @keyframes holding-enter
  *     跑一次 500ms 把铜钱从"无"（opacity 0 / scale 0.82 / blur 10px）渐显到
  *     HOLD 稳态（0.82 / 0.94 / 6px）。520ms 后清除 .entering 让稳态 animation
- *     (coin-breathe + coin-hold-drift) 接手。
- *   不传参数 → 只做 shaking/just-landed → holding 的 class 切换（用于非入场路径）。 */
+ *     (coin-breathe + coin-hold-drift) 接手。用于后续爻（idx > 0）入场。
+ *   不传参数 → 只做 shaking/just-landed/sketching → holding 的 class 切换
+ *     （coinsEnterCalligraphy 跑完 ~1000ms 后调此函数切 .holding 进稳态；
+ *      同时移除首爻的 .coin-sketch 描边叠层 DOM）。 */
 function coinsEnterHold(opts) {
   var entering = !!(opts && opts.entering);
   var wraps = $('coinsRow').querySelectorAll('.coin-wrap');
   for (var i = 0; i < wraps.length; i++) {
-    wraps[i].classList.remove('shaking', 'just-landed');
-    wraps[i].classList.add('holding');
-    if (entering) wraps[i].classList.add('entering');
+    var w = wraps[i];
+    w.classList.remove('shaking', 'just-landed', 'sketching');
+    w.classList.add('holding');
+    if (entering) w.classList.add('entering');
+    // 清掉 sketching 阶段注入的描边叠层 + stagger 变量
+    var sketch = w.querySelector('.coin-sketch');
+    if (sketch) sketch.parentNode.removeChild(sketch);
+    w.style.removeProperty('--sketch-delay');
   }
   if (entering) {
     setTimeout(function () {
       var ws = $('coinsRow').querySelectorAll('.coin-wrap.entering');
       for (var j = 0; j < ws.length; j++) ws[j].classList.remove('entering');
     }, 520);
+  }
+}
+
+/* 书法描边硬币 SVG —— 仅首爻入场用。只画金色外圆 + 内方轮廓，真硬币本体
+ * 由 .coin-spin 里现有 buildCoinSvg 渲染。pathLength="100" 把描边长度归一化
+ * 到 100 单位，CSS 里 stroke-dasharray:100 + stroke-dashoffset 100→0 实现"描"。
+ * 外圆 rotate(-90deg) 让起笔从 12 点（天门）而非默认 3 点。
+ *
+ * 用 svgFromString (DOMParser) 装配，避开 innerHTML —— 与 buildCoinSvg 保持同
+ * 一 XSS 防御姿态，虽然本函数内容全部硬编码无外部输入。 */
+function buildCoinSketch(size) {
+  var r = size / 2;
+  var hole = size * 0.2;
+  var outerRim = size * 0.48;
+  var strokeColor = '#e8c878';  // p.charTip 同色金边
+  var strokeW = Math.max(1.4, size * 0.018);
+  var parts = [];
+  parts.push('<svg xmlns="' + SVG_NS + '" width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '">');
+  parts.push('<circle class="sketch-outer" cx="' + r + '" cy="' + r + '" r="' + outerRim + '" fill="none" stroke="' + strokeColor + '" stroke-width="' + strokeW + '" stroke-linecap="round" pathLength="100"/>');
+  parts.push('<rect class="sketch-inner" x="' + (r - hole/2) + '" y="' + (r - hole/2) + '" width="' + hole + '" height="' + hole + '" fill="none" stroke="' + strokeColor + '" stroke-width="' + strokeW + '" stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>');
+  parts.push('</svg>');
+  return svgFromString(parts.join(''));
+}
+
+/* 手摇模式首爻（idx === 0）入场仪式 —— 书法金线描边 ~1100ms。
+ * 每枚硬币先画外圆 460ms 再补内方 280ms（"天圆地方"）最后本体 340ms 淡入。
+ * 三枚按 --sketch-delay CSS 变量 stagger 150ms：第二枚 150ms 后起笔，第三枚
+ * 300ms 后起笔，像书法家连写三字。总时长约 300 + 460 + 340 = 1100ms。
+ *
+ * 真硬币本体由 coin-fill-in keyframes 末帧逐字对齐 HOLD 稳态，无跳帧。 */
+function coinsEnterCalligraphy() {
+  var wraps = $('coinsRow').querySelectorAll('.coin-wrap');
+  for (var i = 0; i < wraps.length; i++) {
+    var w = wraps[i];
+    w.classList.remove('shaking', 'just-landed', 'holding', 'entering');
+    w.classList.add('sketching');
+    w.style.setProperty('--sketch-delay', (i * 150) + 'ms');
+    // 先清掉可能的残留叠层
+    var old = w.querySelector('.coin-sketch');
+    if (old) old.parentNode.removeChild(old);
+    // 新建描边叠层容器 + appendChild 装配（避免 innerHTML）
+    var sketch = document.createElement('div');
+    sketch.className = 'coin-sketch';
+    sketch.appendChild(buildCoinSketch(82));
+    w.appendChild(sketch);
   }
 }
 
@@ -792,9 +844,21 @@ async function startDivine() {
       if (divineMode === 'manual') {
         setTossPhase('hold');
         renderCoins(shakingFaces, Date.now() + idx, false);
-        // entering:true 触发 500ms 渐显动画，消除"铜钱突然冒出"的闪帧。
-        coinsEnterHold({ entering: true });
-        $('tossHint').textContent = _motionEverFired
+        if (idx === 0) {
+          // 首爻仪式感：书法金线描边 ~1100ms —— 外圆 + 内方从 12 点起笔描出，
+          // 三枚 stagger 150ms，末枚完成即 coin-fill-in 真硬币 340ms 淡入。
+          // 总耗时约 1100ms，期间文案 "金笔生形…" 与书法叙事贴合。
+          coinsEnterCalligraphy();
+          $('tossHint').textContent = '金笔生形…';
+          await sleep(1100);
+          checkpoint();
+          coinsEnterHold();  // 移除 .sketching + 描边叠层，切稳态
+        } else {
+          // 后续爻沿用 500ms holding-enter 渐显（书法仪式感只首爻一次，后续
+          // 爻继续进出循环不重跑，避免节奏被拖慢）。
+          coinsEnterHold({ entering: true });
+        }
+        $('tossHint').textContent = _motionSupported
           ? '持铜钱 · 轻摇可得一爻'
           : '持铜钱 · 摇手机或点击铜钱';
       } else {

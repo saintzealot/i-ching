@@ -410,6 +410,71 @@ button { touch-action: manipulation; }
   0%   { translate: -1.5px  0.5px; }
   100% { translate:  1.5px -0.5px; }
 }
+
+/* 书法描边入场 —— 手摇首爻（idx === 0）进入 HOLD 前的仪式感过渡。
+ * 叙事：金线从 12 点起笔绕外圆一周（"天圆"）→ 中间方孔补点（"地方"）→
+ *       真硬币本体（radialGradient + filter + 文字）淡入到 HOLD 稳态。
+ * 三枚硬币按 --sketch-delay CSS 变量 stagger 150ms（JS 注入），节奏成形。
+ *
+ * 技术：SVG 元素加 pathLength="100" 把描边长度归一化到 100 单位，
+ * 配合 stroke-dasharray: 100 + 动画 stroke-dashoffset 100→0 实现"线在生长"。
+ * transform: rotate(-90deg) 把 circle 默认起笔点从 3 点改到 12 点（天门）。 */
+.coin-wrap.sketching {
+  position: relative;
+}
+.coin-wrap.sketching .coin-sketch {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 3;
+}
+.coin-wrap.sketching .coin-sketch svg {
+  overflow: visible;
+}
+.coin-wrap.sketching .sketch-outer {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  transform-origin: center;
+  transform-box: fill-box;
+  transform: rotate(-90deg);
+  animation: stroke-draw 460ms var(--sketch-delay, 0ms) cubic-bezier(0.55, 0.06, 0.3, 0.98) forwards;
+}
+.coin-wrap.sketching .sketch-inner {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: stroke-draw 280ms calc(var(--sketch-delay, 0ms) + 320ms) cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+.coin-wrap.sketching .coin-spin {
+  opacity: 0;
+  animation: coin-fill-in 340ms calc(var(--sketch-delay, 0ms) + 460ms) ease-out forwards;
+  will-change: opacity, transform, filter, translate;
+}
+
+@keyframes stroke-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+/* 真硬币淡入 —— 340ms 后接力到 HOLD 稳态。100% 末帧逐字对齐
+ * .coin-wrap.holding .coin-spin 静态值（opacity 0.82 / scale 0.94 /
+ * blur(6px) saturate(0.8) / translate -1.5px 0.5px），切 .holding 不跳帧。 */
+@keyframes coin-fill-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.90);
+    filter: blur(4px) saturate(0.8);
+    translate: 0 0;
+  }
+  100% {
+    opacity: 0.82;
+    transform: scale(0.94);
+    filter: blur(6px) saturate(0.8);
+    translate: -1.5px 0.5px;
+  }
+}
+
 /* HOLD 态的微弱光晕 —— 比 .shaking::after 弱很多（0.12 vs 0.26），
  * 暗示"气场在蓄积但还没激活"。光晕的强弱梯度自然引导用户的注意力曲线：
  *   HOLD (弱) → SHAKING (浓) → LAND (无) */
@@ -1417,6 +1482,17 @@ button { touch-action: manipulation; }
   /* animation-delay 也清零，否则结果页分层渐现里 .tabs 的 0.9s delay
    * 对开启"减少动态效果"的用户仍会造成可见的等待。 */
   * { animation-duration: 0.001s !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition-duration: 0.05s !important; }
+
+  /* 书法描边显式 fallback：金线描边叠层直接隐藏，硬币直落 HOLD 稳态。
+   * 上面通配规则已经把动画挤到 0.001s forwards，这里把末帧值再写一遍
+   * 作为防御层 + 测试锚点。 */
+  .coin-wrap.sketching .coin-sketch { opacity: 0 !important; }
+  .coin-wrap.sketching .coin-spin {
+    opacity: 0.82 !important;
+    transform: scale(0.94) !important;
+    filter: blur(6px) saturate(0.8) !important;
+    translate: -1.5px 0.5px !important;
+  }
 }
 </style>
 </head>
