@@ -1770,6 +1770,189 @@ def test_manual_rest_split_into_two_segments(app_js: str):
     )
 
 
+# ============================================================
+# 手摇首爻书法描边入场（2026-04-23 redo）
+# ============================================================
+
+
+def test_stroke_draw_keyframe_present(index_html: str):
+    """@keyframes stroke-draw 必须定义，终态 stroke-dashoffset: 0。
+
+    这是 SVG 路径"描出来"的视觉核心——起始 stroke-dashoffset 100（配合
+    pathLength=100 + stroke-dasharray 100），终态 0 就是"线走满一圈"。"""
+    m = re.search(
+        r"@keyframes\s+stroke-draw\s*\{([^}]*?)\}",
+        index_html,
+        re.S,
+    )
+    assert m, "缺少 @keyframes stroke-draw —— 书法描边动画未定义"
+    body = m.group(1)
+    assert re.search(r"stroke-dashoffset:\s*0\b", body), (
+        "stroke-draw 终态必须 stroke-dashoffset: 0 —— 否则线画不完整"
+    )
+
+
+def test_coin_fill_in_end_matches_holding_steady(index_html: str):
+    """coin-fill-in 100% 末帧必须逐字匹配 .coin-wrap.holding .coin-spin 稳态。
+
+    书法描边完成后真硬币 fade-in，末帧值必须对齐 HOLD 稳态（opacity 0.82 /
+    scale 0.94 / blur(6px) saturate(0.8) / translate -1.5px 0.5px），否则切
+    .holding class 瞬间会有肉眼可见的跳帧。"""
+    m = re.search(
+        r"@keyframes\s+coin-fill-in\s*\{.*?100%\s*\{([^}]*)\}",
+        index_html,
+        re.S,
+    )
+    assert m, "找不到 coin-fill-in 100% 关键帧"
+    end_frame = m.group(1)
+    assert re.search(r"opacity:\s*0\.82\b", end_frame), (
+        "coin-fill-in 100% opacity 应 0.82 对齐 holding 稳态"
+    )
+    assert re.search(r"transform:\s*scale\(0\.94\)", end_frame), (
+        "coin-fill-in 100% transform 应 scale(0.94) 对齐 holding"
+    )
+    assert re.search(r"filter:\s*blur\(6px\)\s+saturate\(0\.8\)", end_frame), (
+        "coin-fill-in 100% filter 应 blur(6px) saturate(0.8) 对齐 holding"
+    )
+    assert re.search(r"translate:\s*-1\.5px\s+0\.5px", end_frame), (
+        "coin-fill-in 100% translate 应 -1.5px 0.5px "
+        "（对齐 coin-hold-drift 0% 起点，稳态接力无跳帧）"
+    )
+
+
+def test_sketching_class_wires_stroke_animations(index_html: str):
+    """.coin-wrap.sketching .sketch-outer / .sketch-inner 必须绑 stroke-draw
+    动画，且通过 --sketch-delay CSS 变量承接 JS stagger。
+
+    防回归：若有人把 delay 硬编码在 CSS 里（animation-delay: 150ms），JS 就
+    没法 per-coin 精确控制 stagger；必须是 var(--sketch-delay, 0ms) 形式。"""
+    m_outer = re.search(
+        r"\.coin-wrap\.sketching\s+\.sketch-outer\s*\{([^}]*)\}",
+        index_html,
+        re.S,
+    )
+    assert m_outer, "缺少 .coin-wrap.sketching .sketch-outer 规则"
+    outer_body = m_outer.group(1)
+    assert re.search(r"stroke-dasharray:\s*100", outer_body), (
+        "sketch-outer 应 stroke-dasharray: 100（配合 SVG pathLength=100 归一化长度）"
+    )
+    assert "stroke-draw" in outer_body, "sketch-outer 应 animation: stroke-draw"
+    assert "var(--sketch-delay" in outer_body, (
+        "sketch-outer 的 animation-delay 应走 var(--sketch-delay, 0ms) —— "
+        "JS 给每枚硬币设不同值实现 stagger"
+    )
+
+    m_inner = re.search(
+        r"\.coin-wrap\.sketching\s+\.sketch-inner\s*\{([^}]*)\}",
+        index_html,
+        re.S,
+    )
+    assert m_inner, "缺少 .coin-wrap.sketching .sketch-inner 规则"
+    inner_body = m_inner.group(1)
+    # 内方描边必须在外圆之后起笔（外圆 460ms + 320ms delay = 780ms 前内方不动）
+    assert "stroke-draw" in inner_body, "sketch-inner 应 animation: stroke-draw"
+    assert re.search(
+        r"calc\(\s*var\(--sketch-delay[^)]*\)\s*\+\s*320ms\s*\)", inner_body
+    ), (
+        "sketch-inner 的 delay 应是 calc(var(--sketch-delay) + 320ms) —— "
+        "在外圆 460ms 描到 70% 时内方开始补点（天圆地方的铸造顺序）"
+    )
+
+
+def test_start_divine_idx0_uses_calligraphy(app_js: str):
+    """startDivine 手摇分支必须按 idx === 0 分叉：首爻 coinsEnterCalligraphy +
+    await sleep(1100) + coinsEnterHold；后续爻沿用 coinsEnterHold({entering:true})。
+
+    钉住 1100 而不是更短/更长，是因为三枚 stagger 150ms + 单爻总 800ms（460
+    外圆 + 320 内方起点 + 340 fill-in）= 300 + 800 = 1100，改时长必须同步改
+    JS 和 CSS（测试里也查 CSS 对应 duration 是防 JS/CSS 走样）。"""
+    assert "coinsEnterCalligraphy" in app_js, (
+        "缺少 coinsEnterCalligraphy 函数 —— 首爻书法描边未接入"
+    )
+    assert "buildCoinSketch" in app_js, (
+        "缺少 buildCoinSketch —— 描边 SVG 构造函数未定义"
+    )
+    m = re.search(
+        r"async\s+function\s+startDivine\s*\([^)]*\)\s*\{(.*?)\n\}",
+        app_js,
+        re.S,
+    )
+    assert m, "找不到 startDivine 函数体"
+    body = m.group(1)
+    assert re.search(r"idx\s*===?\s*0", body), (
+        "startDivine 手摇分支应判断 idx === 0（首爻仪式、后续爻不重复）"
+    )
+    # idx === 0 分支体内调 coinsEnterCalligraphy + sleep(1100)
+    m2 = re.search(
+        r"idx\s*===?\s*0\s*\)\s*\{([^{}]*?(?:\{[^{}]*\}[^{}]*?)*?)\}\s*else",
+        body,
+        re.S,
+    )
+    assert m2, "找不到 startDivine 的 idx === 0 分支体"
+    idx0_body = m2.group(1)
+    assert "coinsEnterCalligraphy" in idx0_body, (
+        "idx === 0 分支应调 coinsEnterCalligraphy"
+    )
+    assert re.search(r"sleep\s*\(\s*1100\s*\)", idx0_body), (
+        "idx === 0 分支应 await sleep(1100) 给描边动画完整时长"
+    )
+
+
+def test_build_coin_sketch_uses_path_length_normalization(app_js: str):
+    """buildCoinSketch 必须用 pathLength='100' 把 SVG 描边长度归一化。
+
+    不归一化的话每枚硬币的 SVG 根据 viewBox 计算不同的周长，CSS 写死
+    stroke-dasharray: 100 就会错位。pathLength='100' 是跨浏览器的兼容选择。"""
+    m = re.search(
+        r"function\s+buildCoinSketch\s*\([^)]*\)\s*\{(.*?)\n\}",
+        app_js,
+        re.S,
+    )
+    assert m, "找不到 buildCoinSketch 函数体"
+    body = m.group(1)
+    # 外圆 + 内方都必须带 pathLength="100"
+    assert body.count('pathLength="100"') >= 2, (
+        f'buildCoinSketch 应给 ≥2 个 SVG 元素加 pathLength="100" '
+        f"（外圆 + 内方），当前 {body.count(chr(34))} 次 pathLength 出现 —— "
+        "不归一化会让 CSS stroke-dasharray:100 在不同硬币尺寸下错位"
+    )
+    # 两个 class hook 必须存在（CSS 绑定 animation 用）
+    assert 'class="sketch-outer"' in body, "buildCoinSketch 缺外圆 class hook"
+    assert 'class="sketch-inner"' in body, "buildCoinSketch 缺内方 class hook"
+
+
+def test_reduced_motion_sketching_fallback(index_html: str):
+    """prefers-reduced-motion 下描边叠层隐藏，硬币直接落 HOLD 稳态。
+
+    全局通配规则已经把 animation 挤到 0.001s，这里显式 fallback 是防御层
+    + 测试锚点，防止未来有人改通配规则破坏 reduced-motion 路径。"""
+    m = re.search(
+        r"@media\s*\(\s*prefers-reduced-motion:\s*reduce\s*\)\s*\{(.*?)\n\}\s*(?:\n|</style>)",
+        index_html,
+        re.S,
+    )
+    assert m, "找不到 @media (prefers-reduced-motion: reduce) 规则块"
+    body = m.group(1)
+    # 描边叠层应被显式隐藏
+    assert re.search(
+        r"\.coin-wrap\.sketching\s+\.coin-sketch[^}]*?opacity:\s*0",
+        body,
+        re.S,
+    ), "reduced-motion 下 .coin-sketch 应显式 opacity: 0"
+    # .coin-spin 应显式落在 HOLD 稳态
+    assert re.search(
+        r"\.coin-wrap\.sketching\s+\.coin-spin[^}]*?"
+        r"opacity:\s*0\.82[^}]*?"
+        r"scale\(0\.94\)[^}]*?"
+        r"blur\(6px\)",
+        body,
+        re.S,
+    ), (
+        "reduced-motion 下 .coin-wrap.sketching .coin-spin 应显式落到 HOLD 稳态"
+        " (opacity 0.82 / scale 0.94 / blur 6px)"
+    )
+
+
 def test_all_hexagrams_page_hex_data_matches_backend():
     """dev-tools/all-hexagrams.js 的 HEX_DATA 必须和 backend HEXAGRAMS 严格一致。
 
