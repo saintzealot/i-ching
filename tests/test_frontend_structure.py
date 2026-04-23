@@ -611,6 +611,7 @@ REQUIRED_KEYFRAMES = [
     "fade-in",
     "reveal-fade",
     "reveal-focus",
+    "holding-enter",
 ]
 
 
@@ -1160,6 +1161,453 @@ def test_start_divine_populates_coin_result_and_hex_preview(app_js: str):
 def test_format_coin_result_exposed_in_core(core_js: str):
     """formatCoinResult 应作为纯函数暴露在 iching-core.js"""
     assert "formatCoinResult" in core_js, "iching-core.js 需导出 formatCoinResult"
+
+
+# ============================================================
+# 手摇一爻一摇：状态机 + 三段式动画（2026-04-21 重构）
+# ============================================================
+
+
+def test_manual_mode_shake_thresholds_defined(app_js: str):
+    """迟滞阈值 + 最小 shake 时长 + 静候窗口 —— 常量是回归的可视锚点。
+    这些值的语义见 awaitManualToss 头注释的状态机图。"""
+    assert re.search(r"\bSHAKE_HI\b\s*=\s*18\b", app_js), (
+        "缺少 SHAKE_HI 阈值常量（进入 SHAKING 的加速度门槛）"
+    )
+    assert re.search(r"\bSHAKE_LO\b\s*=\s*6\b", app_js), (
+        "缺少 SHAKE_LO 阈值常量（判定静止的加速度门槛）—— 双阈值 hysteresis 设计"
+    )
+    assert re.search(r"\bMIN_SHAKE_MS\b\s*=\s*600\b", app_js), (
+        "缺少 MIN_SHAKE_MS 常量（每爻摇动阶段最短视觉持续 600ms）"
+    )
+    assert re.search(r"\bQUIET_MS\b\s*=\s*300\b", app_js), (
+        "缺少 QUIET_MS 常量（爻间静候窗口；防一次摇动串爆 6 爻）"
+    )
+
+
+def test_manual_toss_state_machine_keywords_present(app_js: str):
+    """awaitManualToss 应含 HOLD / SHAKING / QUIET_WAIT 状态关键字。
+    防重构时状态机被压平成简单单阈值触发（那样又会串爆）。"""
+    assert re.search(r"function\s+awaitManualToss\s*\(", app_js), (
+        "缺少 awaitManualToss —— 手摇分支应从 awaitShakeSettle 分出独立状态机"
+    )
+    for keyword in ("HOLD", "SHAKING", "QUIET_WAIT"):
+        assert keyword in app_js, f"awaitManualToss 缺少状态关键字 {keyword!r}"
+
+
+def test_shake_detector_arms_on_manual_mode(app_js: str):
+    """setDivineMode('manual') 需挂 devicemotion 监听；切回 auto 需摘。
+    常驻监听而非每爻临时挂摘，是"爻间静候"能生效的前提：
+    QUIET_WAIT 需要持续采样加速度才能判断手机是否真的静止。"""
+    assert "armShakeDetector" in app_js, "缺少 armShakeDetector"
+    assert "disarmShakeDetector" in app_js, "缺少 disarmShakeDetector"
+    # setDivineMode 里必须引用二者（模式切换驱动挂/摘）
+    m = re.search(
+        r"function\s+setDivineMode\s*\([^)]*\)\s*\{(.*?)\n\}",
+        app_js,
+        re.S,
+    )
+    assert m, "找不到 setDivineMode 函数体"
+    body = m.group(1)
+    assert "armShakeDetector" in body, "setDivineMode 切手摇时未 armShakeDetector"
+    assert "disarmShakeDetector" in body, "setDivineMode 切自动时未 disarmShakeDetector"
+
+
+def test_no_motion_fallback_hint_present(app_js: str):
+    """无 devicemotion 事件时的 click fallback 提示 —— 覆盖 Android HTTP /
+    桌面 / iOS 权限拒绝三种情况。用户反馈"不只考虑 iOS，还有 Android"。"""
+    assert "_motionEverFired" in app_js, (
+        "缺少 _motionEverFired 标志 —— 无法判断当前设备是否真的能摇"
+    )
+    assert "点击铜钱" in app_js, "缺少无 devicemotion 时的点击 fallback 提示文案"
+
+
+def test_toss_phase_css_present(index_html: str):
+    """三段式 data-toss-phase CSS 选择器 —— 驱动 hold/shake/land 的 UI 语义态。"""
+    assert re.search(r'#shakeProgress\[data-toss-phase="hold"\]', index_html), (
+        "缺少 [data-toss-phase=hold] CSS 选择器"
+    )
+    assert re.search(r'#shakeProgress\[data-toss-phase="shake"\]', index_html), (
+        "缺少 [data-toss-phase=shake] CSS 选择器"
+    )
+
+
+def test_coin_wrap_holding_class_styled(index_html: str):
+    """.coin-wrap.holding 必须有独立样式 —— HOLD 态要和 .shaking 视觉不同，
+    否则 HOLD → SHAKE 切换无感知，三段式叙事就塌了。"""
+    assert re.search(r"\.coin-wrap\.holding\b", index_html), (
+        "CSS 未定义 .coin-wrap.holding —— HOLD 态铜钱视觉未区分"
+    )
+
+
+def test_start_divine_sets_toss_phase(app_js: str):
+    """startDivine 循环里应调 setTossPhase('hold') / 'land'，否则三段式 CSS 不生效。"""
+    m = re.search(
+        r"async\s+function\s+startDivine\s*\([^)]*\)\s*\{(.*?)\n\}",
+        app_js,
+        re.S,
+    )
+    assert m, "找不到 startDivine 函数体"
+    body = m.group(1)
+    assert "setTossPhase" in body, "startDivine 应调 setTossPhase 切换三段式态"
+    assert "'hold'" in body or '"hold"' in body, (
+        "startDivine 应在 HOLD 阶段调 setTossPhase('hold')"
+    )
+    assert "'land'" in body or '"land"' in body, (
+        "startDivine 应在 LAND 阶段调 setTossPhase('land')"
+    )
+
+
+def test_manual_inter_line_rest_longer_than_auto(app_js: str):
+    """手摇模式爻间屏息应比自动更长 —— 给用户"呼吸一次"再摇下一爻。
+    防回归：有人可能统一节奏时把 1000ms 退回 700ms。"""
+    m = re.search(
+        r"async\s+function\s+startDivine\s*\([^)]*\)\s*\{(.*?)\n\}",
+        app_js,
+        re.S,
+    )
+    assert m, "找不到 startDivine 函数体"
+    body = m.group(1)
+    # 节奏判断：手摇分支里必须出现 1000（或更长）ms 的 sleep
+    assert re.search(r"\b1000\b", body), (
+        "startDivine 手摇分支应有 1000ms 屏息（现有是 700ms 通用）"
+    )
+
+
+# ============================================================
+# 节奏感优化 B + D：dash 节拍器 + 屏息死区拆段（2026-04-21）
+# ============================================================
+
+
+def test_dash_active_shake_solid_style(index_html: str):
+    """Stage B：.active.active-shake 必须实心亮金 + 停脉冲 —— 用户感知"系统在听"。"""
+    # active-shake 必须把 animation 置为 none（否则 dash-pulse 仍在跑，和 HOLD 没区分）
+    m = re.search(
+        r"\.df-dashes\s*>\s*span\.active\.active-shake\s*\{([^}]*)\}",
+        index_html,
+        re.S,
+    )
+    assert m, "缺少 .df-dashes > span.active.active-shake CSS 规则"
+    body = m.group(1)
+    assert re.search(r"animation\s*:\s*none", body), (
+        "active-shake 应 animation: none —— 停掉 HOLD 的 dash-pulse 呼吸，改为静止的 '紧张' 态"
+    )
+
+
+def test_dash_land_ping_keyframe(index_html: str):
+    """Stage B：LAND 态的 ping 闪烁 keyframe 必须存在且含 scaleY 弹性拉伸。"""
+    m = re.search(r"@keyframes\s+dash-land-ping\b([^@]*)", index_html, re.S)
+    assert m, "缺少 @keyframes dash-land-ping"
+    body = m.group(1)
+    # scaleY 放大是"被敲击"的弹性感，没了就没有 ping 效果
+    assert re.search(r"scaleY\(1\.[0-9]", body), (
+        "dash-land-ping 缺少 scaleY 弹性拉伸 —— 丧失 LAND 态的 'ping' 观感"
+    )
+
+
+def test_set_toss_phase_syncs_active_dash(app_js: str):
+    """Stage B：setTossPhase 必须同步更新当前 active dash 的子 class，
+    否则 dash 节拍器永远停在 HOLD 态，shake / land 不会被可视化。"""
+    m = re.search(
+        r"function\s+setTossPhase\s*\([^)]*\)\s*\{(.*?)\n\}",
+        app_js,
+        re.S,
+    )
+    assert m, "找不到 setTossPhase 函数体"
+    body = m.group(1)
+    assert "active-shake" in body, (
+        "setTossPhase 未同步 'active-shake' —— SHAKE 态 dash 视觉丢失"
+    )
+    assert "active-land" in body, (
+        "setTossPhase 未同步 'active-land' —— LAND 态 dash 的 ping 闪烁不会触发"
+    )
+
+
+def test_ready_pulse_stage_a_removed(index_html: str, app_js: str):
+    """Stage A "灯泡脉冲" 已回退 —— 用户反馈太像数字 UI 语言，不贴合筊杯语境。
+    回退后用持续性环境动画（gather-in + drift + shimmer）承担"存在感"信号。
+    防回归：任何人若把 ready-pulse 搬回来都立刻炸。"""
+    assert "ready-pulse" not in index_html, (
+        "index.html 仍含 ready-pulse —— Stage A 应已回退为环境动画"
+    )
+    assert "coin-ready-pulse" not in index_html, (
+        "index.html 仍含 @keyframes coin-ready-pulse 残留"
+    )
+    assert "pulseHoldReady" not in app_js, (
+        "app.js 仍含 pulseHoldReady —— Stage A 的灯泡脉冲应完全回退"
+    )
+    assert "ready-pulse" not in app_js, "app.js 仍含 ready-pulse 类名操作残留"
+
+
+def test_holding_coin_drift_animation(index_html: str):
+    """HOLD 态的微晃 drift：持续性 ±1.5px translate，比 .shaking 的 0.2s/2px 更慢更小。
+    这是"铜钱在掌心里轻漂"的视觉基础，也是"活着在等"的环境信号。"""
+    assert re.search(
+        r"\.coin-wrap\.holding\s+\.coin-spin\s*\{[^}]*animation\s*:[^;]*coin-hold-drift",
+        index_html,
+        re.S,
+    ), "HOLD .coin-spin 未绑定 coin-hold-drift 动画"
+    m = re.search(r"@keyframes\s+coin-hold-drift\b([^@]*)", index_html, re.S)
+    assert m, "缺少 @keyframes coin-hold-drift"
+    body = m.group(1)
+    # 必须用 translate 属性而不是 transform —— 和 coin-breathe 的 transform/scale 不冲突
+    assert "translate:" in body, (
+        "coin-hold-drift 应用独立 translate 属性，避免与 coin-breathe 的 scale 冲突"
+    )
+
+
+def test_pearl_sheen_on_coin_surface(index_html: str):
+    """珠光在硬币"表面"（.coin-spin::after 内层）而非外环。
+    用户反馈："流光不是在硬币边缘流动，而是在硬币表面，有一种珠光感"。
+    防回归：任何人把 shimmer 搬回 .coin-wrap::before 外环都会炸。"""
+    # 珠光必须长在 .coin-spin 内侧，不是 .coin-wrap 外环
+    assert re.search(
+        r"\.coin-wrap\.holding\s+\.coin-spin::after\s*\{[^}]*radial-gradient",
+        index_html,
+        re.S,
+    ), "缺少 .coin-wrap.holding .coin-spin::after 的 radial-gradient 珠光层"
+    # mix-blend-mode: overlay —— 让高光只提亮金属色区域
+    m = re.search(
+        r"\.coin-wrap\.holding\s+\.coin-spin::after\s*\{([^}]*)\}",
+        index_html,
+        re.S,
+    )
+    assert m, "找不到 .coin-spin::after 规则体"
+    body = m.group(1)
+    assert "mix-blend-mode" in body, (
+        ".coin-spin::after 缺少 mix-blend-mode —— 珠光会变成不透明贴纸而非表面光"
+    )
+    # 外环 shimmer 应已移除（::before 或 halo-hold-shimmer 不应再出现）
+    assert "halo-hold-shimmer" not in index_html, (
+        "halo-hold-shimmer（外环流光）应已被移除 —— 用户明确要求珠光在表面不在边缘"
+    )
+
+
+def test_regather_transition_on_landed_coins(index_html: str, app_js: str):
+    """LAND→HOLD 过渡：3 枚落定硬币向 coinsRow 中心"归位"并同步 blur/halo 升起。
+    用户反馈："应该要先归位，同步光晕升起让硬币变得模糊"。"""
+    # CSS: .regathering 必须用 translate 表达归位位移
+    m = re.search(
+        r"\.coin-wrap\.holding\.regathering\s*\{([^}]*)\}",
+        index_html,
+        re.S,
+    )
+    assert m, "缺少 .coin-wrap.holding.regathering CSS 规则"
+    body = m.group(1)
+    assert "translate:" in body, (
+        ".regathering 缺少 translate —— '归位'移动的视觉基础丢失"
+    )
+    assert "transition:" in body and "translate" in body, (
+        ".regathering 缺少 translate 的 transition —— 归位会瞬移而非平滑过渡"
+    )
+    # JS: 必须有 startRegather 函数，且在 startDivine 里被调用
+    assert re.search(r"function\s+startRegather\s*\(", app_js), (
+        "缺少 startRegather 工具函数"
+    )
+    m2 = re.search(
+        r"async\s+function\s+startDivine\s*\([^)]*\)\s*\{(.*?)\n\}",
+        app_js,
+        re.S,
+    )
+    assert m2, "找不到 startDivine 函数体"
+    assert "startRegather(" in m2.group(1), (
+        "startDivine 未调用 startRegather —— 归位动作不会触发"
+    )
+    # JS: startRegather 必须计算朝中心的 dx/dy 并写入 CSS 变量
+    m3 = re.search(
+        r"function\s+startRegather\s*\([^)]*\)\s*\{(.*?)\n\}",
+        app_js,
+        re.S,
+    )
+    assert m3, "找不到 startRegather 函数体"
+    sr_body = m3.group(1)
+    assert "--home-dx" in sr_body and "--home-dy" in sr_body, (
+        "startRegather 未写入 --home-dx / --home-dy CSS 变量"
+    )
+    assert "getBoundingClientRect" in sr_body, (
+        "startRegather 未用 getBoundingClientRect 计算相对中心的位移 —— 归位方向会错"
+    )
+
+
+def test_holding_enter_keyframe_matches_steady_state(index_html: str):
+    """入场渐显：新 3 枚 .coin-wrap 从"无"到稳态 HOLD 的 500ms 过渡。
+    to 态的 scale/opacity/filter 必须严格对齐稳态起点，否则 JS 移除 .entering
+    瞬间稳态 animation (coin-breathe from scale 0.94) 会发生跳变闪帧。"""
+    m = re.search(r"@keyframes\s+holding-enter\b([^@]*)", index_html, re.S)
+    assert m, "缺少 @keyframes holding-enter"
+    body = m.group(1)
+    # from 态：极淡雾团
+    assert re.search(r"from\s*\{[^}]*opacity:\s*0\b", body, re.S), (
+        "holding-enter from 态缺少 opacity: 0 —— 铜钱不会从'无'渐入"
+    )
+    assert re.search(r"from\s*\{[^}]*scale\(0\.82\)", body, re.S), (
+        "holding-enter from 态缺少 scale(0.82) —— 入场缩放起点错"
+    )
+    assert re.search(r"from\s*\{[^}]*blur\(10px\)", body, re.S), (
+        "holding-enter from 态缺少 blur(10px) —— 入场模糊起点错"
+    )
+    # to 态：与稳态 .coin-wrap.holding .coin-spin 严格匹配（0.82 / 0.94 / 6px）
+    assert re.search(r"to\s*\{[^}]*opacity:\s*0\.82\b", body, re.S), (
+        "holding-enter to 态 opacity 必须为 0.82（对齐稳态），否则 500ms 末尾会闪"
+    )
+    assert re.search(r"to\s*\{[^}]*scale\(0\.94\)", body, re.S), (
+        "holding-enter to 态 scale 必须为 0.94（对齐 coin-breathe from），否则衔接跳变"
+    )
+    assert re.search(r"to\s*\{[^}]*blur\(6px\)", body, re.S), (
+        "holding-enter to 态 blur 必须为 6px（对齐稳态 filter），否则模糊度会跳"
+    )
+
+
+def test_holding_entering_rule_binds_animation(index_html: str, app_js: str):
+    """.coin-wrap.holding.entering .coin-spin 规则必须绑定 holding-enter animation
+    + forwards，保证 500ms 跑完后 to 态锁住，等 JS 移除 .entering 稳态接手。
+    同时 coinsEnterHold 必须接受 opts.entering 参数，startDivine 手摇分支必须调用。"""
+    # CSS：entering 类绑定动画 + forwards
+    m = re.search(
+        r"\.coin-wrap\.holding\.entering\s+\.coin-spin\s*\{([^}]*)\}",
+        index_html,
+        re.S,
+    )
+    assert m, "缺少 .coin-wrap.holding.entering .coin-spin 规则 —— 入场动画无法触发"
+    body = m.group(1)
+    assert "holding-enter" in body, (
+        ".coin-wrap.holding.entering .coin-spin 未绑定 holding-enter animation"
+    )
+    assert "forwards" in body, "holding-enter 缺少 forwards —— 动画跑完会闪回 from 态"
+    # JS：coinsEnterHold 签名支持参数
+    m2 = re.search(
+        r"function\s+coinsEnterHold\s*\(([^)]*)\)\s*\{(.*?)\n\}",
+        app_js,
+        re.S,
+    )
+    assert m2, "找不到 coinsEnterHold 函数"
+    sig, body = m2.group(1), m2.group(2)
+    assert sig.strip(), "coinsEnterHold 必须接受参数（用于 opts.entering）"
+    assert "entering" in body, (
+        "coinsEnterHold 函数体未处理 entering —— 入场动画不会被触发"
+    )
+    # JS：startDivine 手摇分支调 coinsEnterHold({ entering: true })
+    m3 = re.search(
+        r"async\s+function\s+startDivine\s*\([^)]*\)\s*\{(.*?)\n\}",
+        app_js,
+        re.S,
+    )
+    assert m3, "找不到 startDivine 函数体"
+    assert re.search(
+        r"coinsEnterHold\(\s*\{\s*entering:\s*true\s*\}\s*\)",
+        m3.group(1),
+    ), "startDivine 手摇分支未调用 coinsEnterHold({ entering: true }) —— 入场渐显失效"
+
+
+def test_coin_shake_uses_rotate_not_translate(index_html: str):
+    """coin-shake 必须用 rotate 抖而不是 translate —— 否则 CSS animation 占用
+    .coin-wrap translate 属性，会覆盖基础 translate transition，导致
+    regathering→shaking 时 translate 从 var(--home-dx,dy) 瞬跳到 coin-shake
+    起点（用户报"硬币位置突然改变"的根因）。
+
+    rotate 是 CSS Transforms Level 2 独立属性，和 inline style.transform=
+    'rotate(Xdeg)' 合成叠加而非覆盖，不影响位置排布的固定角度。"""
+    m = re.search(r"@keyframes\s+coin-shake\b([^@]*)", index_html, re.S)
+    assert m, "缺少 @keyframes coin-shake"
+    body = m.group(1)
+    # 必须用 rotate 抖动（不能用 translate —— 会覆盖外层 translate transition）
+    assert "rotate:" in body, (
+        "coin-shake 必须用独立 rotate 属性抖动；translate 会覆盖外层 "
+        "translate transition 导致 HOLD→SHAKE 位置瞬跳"
+    )
+    assert "translate:" not in body, (
+        "coin-shake 不得使用 translate —— 用 rotate 代替才能保留外层 "
+        "translate 给基础 transition 做状态过渡"
+    )
+
+
+def test_holding_enter_translate_aligns_with_drift(index_html: str):
+    """holding-enter to 态的 translate 必须精确匹配 coin-hold-drift 0% 起点
+    （-1.5px 0.5px），保证 JS 移除 .entering 瞬间稳态 drift animation 从
+    相同值起步，消除"蓄势→持稳"阶段 1.5-2.5px 的 translate 跳变。
+
+    drift 是 alternate + from(0%) 起点，所以 from(0%) 就是启动瞬间的 translate。"""
+    m = re.search(r"@keyframes\s+holding-enter\b([^@]*)", index_html, re.S)
+    assert m, "缺少 @keyframes holding-enter"
+    body = m.group(1)
+    # from 态：translate 从 0 开始（入场无位移）
+    assert re.search(r"from\s*\{[^}]*translate:\s*0\s+0\b", body, re.S), (
+        "holding-enter from 态应包含 translate: 0 0（入场起始位置）"
+    )
+    # to 态必须精确等于 coin-hold-drift 0% 的 translate 值
+    assert re.search(r"to\s*\{[^}]*translate:\s*-1\.5px\s+0\.5px\b", body, re.S), (
+        "holding-enter to 态 translate 必须为 -1.5px 0.5px，精确对齐 "
+        "coin-hold-drift from，否则稳态 drift 启动瞬间 translate 会跳变"
+    )
+
+
+def test_coin_wrap_base_transition_includes_translate(index_html: str):
+    """.coin-wrap 基础 transition 必须单独声明 translate（CSS Transforms Level 2
+    独立属性，不会被 `transform 0.5s` 覆盖）。不加这条，.regathering 类被
+    coinsEnterShake() 删除瞬间 translate 会从 var(--home-dx,dy) 突变回 0，
+    HOLD→SHAKE 过渡会"啪地散开"。"""
+    # 抓 .coin-wrap { ... } 基础规则（不含 .holding / .shaking / .just-landed 等修饰）
+    m = re.search(
+        r"\.coin-wrap\s*\{([^}]*)\}",
+        index_html,
+        re.S,
+    )
+    assert m, "找不到 .coin-wrap 基础 CSS 规则"
+    body = m.group(1)
+    assert "transition:" in body, ".coin-wrap 基础规则缺少 transition"
+    # transition 属性必须显式列出 translate（不是只有 transform）
+    transition_m = re.search(r"transition:\s*([^;]+);", body, re.S)
+    assert transition_m, ".coin-wrap transition 声明格式异常"
+    transition_value = transition_m.group(1)
+    assert "translate" in transition_value, (
+        ".coin-wrap 基础 transition 未覆盖 translate 属性 —— "
+        "HOLD→SHAKE 时 translate 会从 --home-dx/dy 瞬变回 0"
+    )
+
+
+def test_shake_peak_haptic_with_debounce(app_js: str):
+    """SHAKE 阶段每次 mag>HI 的峰值回响：haptic(8) + 200ms 去抖。
+    physical event（手腕动作）= 物理回响合格；禁止密集连发把仪式感震成灯泡。"""
+    m = re.search(
+        r"function\s+awaitManualToss\s*\([^)]*\)\s*\{(.*)",
+        app_js,
+        re.S,
+    )
+    assert m, "找不到 awaitManualToss 函数"
+    body = m.group(1)
+    # 去抖变量必须在 Promise 闭包内声明
+    assert "lastPeakHaptic" in body, "awaitManualToss 缺少 lastPeakHaptic 去抖状态变量"
+    # SHAKE 分支必须在 mag > SHAKE_HI 时调 haptic(8)
+    assert re.search(r"haptic\(8\)", body), (
+        "awaitManualToss 未在 SHAKE 分支发 haptic(8) 峰值回响"
+    )
+    # 200ms 去抖阈值
+    assert re.search(r"lastPeakHaptic\s*\)\s*>\s*200", body), (
+        "SHAKE 峰值 haptic 缺少 200ms 去抖条件 —— 密集震动会破坏仪式感"
+    )
+
+
+def test_manual_rest_split_into_two_segments(app_js: str):
+    """Stage D：手摇非末爻的爻间屏息必须拆成两段叙事，消除"阳爻死静 1 秒"的死区。
+    防回归：有人可能统一节奏时合并成整段 sleep(1000)。"""
+    m = re.search(
+        r"async\s+function\s+startDivine\s*\([^)]*\)\s*\{(.*?)\n\}",
+        app_js,
+        re.S,
+    )
+    assert m, "找不到 startDivine 函数体"
+    body = m.group(1)
+    # 分段时长（450 + 550 = 1000，与原整段等长；仅在非末爻生效以保留末爻的整段屏息）
+    assert re.search(r"\bsleep\(450\)", body), (
+        "startDivine 手摇非末爻屏息缺少 sleep(450) 第一段（全亮 '阳爻'）"
+    )
+    assert re.search(r"\bsleep\(550\)", body), (
+        "startDivine 手摇非末爻屏息缺少 sleep(550) 第二段（过渡到下一爻蓄势）"
+    )
+    # 过渡文案必须存在 —— 这句是消除"卡住了吗"疑虑的核心信号
+    assert "凝神片刻" in body, (
+        "startDivine 缺少 '凝神片刻 · 下一爻蓄势' 过渡文案 —— Stage D 的叙事连续性未生效"
+    )
 
 
 def test_all_hexagrams_page_hex_data_matches_backend():
