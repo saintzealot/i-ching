@@ -1770,6 +1770,184 @@ def test_manual_rest_split_into_two_segments(app_js: str):
     )
 
 
+# ============================================================
+# 手摇模式首爻入场 —— 金砂聚合动画（2026-04-23）
+# ============================================================
+
+
+def test_sand_converge_keyframes_present(index_html: str):
+    """@keyframes sand-converge 必须定义，含多层 radial-gradient 汇聚所需的
+    background-position / background-size / opacity 过渡关键帧。
+
+    防退化：若有人把 sand-converge 改回单层 fade-in（失去"粒子汇聚"叙事），
+    0% / 65% / 100% 不同的 background-position 值会不见，测试 fail。"""
+    m = re.search(
+        r"@keyframes\s+sand-converge\s*\{(.*?)\n\}",
+        index_html,
+        re.S,
+    )
+    assert m, "缺少 @keyframes sand-converge —— 金砂聚合入场动画未定义"
+    body = m.group(1)
+    # 0% 起点：位置分散（至少有 15% / 85% / 12% 等非中心值）
+    assert re.search(r"0%\s*\{[^}]*?15%\s+20%[^}]*?85%\s+18%", body, re.S), (
+        "sand-converge 0% 关键帧缺少分散的 background-position —— "
+        "粒子起始应在四方角落，不是中心"
+    )
+    # 100% 终点：所有 8 层收敛到 50% 50%
+    assert body.count("50% 50%") >= 8, (
+        "sand-converge 100% 关键帧所有层 background-position 都应汇聚到 50% 50%"
+    )
+    # opacity 0 → 非 0 → 0 的渡峰（起始隐、中间显、末帧淡出让硬币接棒）
+    assert re.search(r"0%\s*\{[^}]*?opacity:\s*0", body, re.S), "0% 起点 opacity 应为 0"
+    assert re.search(r"100%\s*\{[^}]*?opacity:\s*0", body, re.S), (
+        "100% 末帧 opacity 应为 0 —— 沙云淡出让 coin-crystallize 硬币本体接手"
+    )
+
+
+def test_coin_crystallize_keyframes_present(index_html: str):
+    """@keyframes coin-crystallize 硬币从隐到 HOLD 稳态的凝结曲线。
+    0-45% 完全隐（opacity 0）让沙云唱主角，45-100% 渐显到稳态。"""
+    m = re.search(
+        r"@keyframes\s+coin-crystallize\s*\{(.*?)\n\}",
+        index_html,
+        re.S,
+    )
+    assert m, "缺少 @keyframes coin-crystallize —— 硬币凝结动画未定义"
+    body = m.group(1)
+    # 0% 和 45% 都应 opacity 0（让沙云在这段时间里独占视觉）
+    assert re.search(r"0%\s*\{[^}]*?opacity:\s*0", body, re.S), "0% opacity 应为 0"
+    assert re.search(r"45%\s*\{[^}]*?opacity:\s*0", body, re.S), (
+        "45% opacity 应仍为 0 —— 硬币本体前 45% 时间完全隐，让沙云叙事不被打断"
+    )
+
+
+def test_crystallize_end_state_matches_holding_steady(index_html: str):
+    """coin-crystallize 100% 末帧必须逐字匹配 .coin-wrap.holding .coin-spin 稳态。
+
+    这是防止"沙聚合跑完切 .holding 瞬间跳帧"的核心断言。四个值必须对齐：
+      opacity 0.82 / transform scale(0.94) / filter blur(6px) saturate(0.8) /
+      translate -1.5px 0.5px
+
+    将来改动 HOLD 稳态（例如 blur 改成 5px）时本测试会 fail，强制同步改 keyframes。"""
+    m = re.search(
+        r"@keyframes\s+coin-crystallize\s*\{.*?100%\s*\{([^}]*)\}",
+        index_html,
+        re.S,
+    )
+    assert m, "找不到 coin-crystallize 100% 关键帧"
+    end_frame = m.group(1)
+    # 逐项验证末帧值
+    assert re.search(r"opacity:\s*0\.82\b", end_frame), (
+        "coin-crystallize 100% opacity 应 0.82 对齐 holding 稳态"
+    )
+    assert re.search(r"transform:\s*scale\(0\.94\)", end_frame), (
+        "coin-crystallize 100% transform 应 scale(0.94) 对齐 holding 稳态"
+    )
+    assert re.search(r"filter:\s*blur\(6px\)\s+saturate\(0\.8\)", end_frame), (
+        "coin-crystallize 100% filter 应 blur(6px) saturate(0.8) 对齐 holding 稳态"
+    )
+    assert re.search(r"translate:\s*-1\.5px\s+0\.5px", end_frame), (
+        "coin-crystallize 100% translate 应 -1.5px 0.5px "
+        "（对齐 coin-hold-drift 0% 起点，稳态接力无跳帧）"
+    )
+
+
+def test_start_divine_manual_idx0_uses_sand_gather(app_js: str):
+    """startDivine 手摇分支必须按 idx === 0 分支：首爻走 coinsEnterSandGather
+    + 'idx === 0' 判断 + 800ms sleep + coinsEnterHold（不带 entering）；
+    非首爻沿用 coinsEnterHold({ entering: true })。
+
+    防退化：任何人把"沙聚合"改成每爻跑 / 去掉 idx===0 分支，都会被钉住。"""
+    assert "coinsEnterSandGather" in app_js, (
+        "缺少 coinsEnterSandGather 函数 —— 首爻仪式入场未接入"
+    )
+    m = re.search(
+        r"async\s+function\s+startDivine\s*\([^)]*\)\s*\{(.*?)\n\}",
+        app_js,
+        re.S,
+    )
+    assert m, "找不到 startDivine 函数体"
+    body = m.group(1)
+    # 必须有 idx === 0 的分支
+    assert re.search(r"idx\s*===?\s*0", body), (
+        "startDivine 手摇分支应判断 idx === 0（首爻仪式、后续爻不重复）"
+    )
+    # idx === 0 分支内调 coinsEnterSandGather
+    m2 = re.search(
+        r"idx\s*===?\s*0\s*\)\s*\{([^{}]*?(?:\{[^{}]*\}[^{}]*?)*?)\}\s*else",
+        body,
+        re.S,
+    )
+    assert m2, "找不到 startDivine 的 idx === 0 分支体"
+    idx0_body = m2.group(1)
+    assert "coinsEnterSandGather" in idx0_body, (
+        "idx === 0 分支应调 coinsEnterSandGather（不是 coinsEnterHold）"
+    )
+    assert re.search(r"sleep\s*\(\s*800\s*\)", idx0_body), (
+        "idx === 0 分支应 await sleep(800) 给沙聚合动画完整时长"
+    )
+
+
+def test_coin_wrap_gathering_has_sand_before_layer(index_html: str):
+    """.coin-wrap.gathering::before 必须有多层 radial-gradient 背景作为沙云。
+
+    结构保证：单层 gradient 是"光晕"不是"粒子云"；多层才有"多个粒子群"观感。"""
+    m = re.search(
+        r"\.coin-wrap\.gathering::before\s*\{([^}]*)\}",
+        index_html,
+        re.S,
+    )
+    assert m, "缺少 .coin-wrap.gathering::before 规则"
+    body = m.group(1)
+    # 必须引用 radial-gradient 并且多层（至少 6 个）
+    gradient_count = body.count("radial-gradient")
+    assert gradient_count >= 6, (
+        f".coin-wrap.gathering::before 应含 ≥6 层 radial-gradient 模拟粒子群 "
+        f"（当前 {gradient_count} 层），单层是光晕不是沙云"
+    )
+    # sand-converge 动画必须绑定
+    assert "sand-converge" in body, (
+        ".coin-wrap.gathering::before 未绑定 animation: sand-converge"
+    )
+    # mix-blend-mode: screen 让金沙在深色背景上透亮
+    assert "mix-blend-mode" in body, (
+        ".coin-wrap.gathering::before 缺 mix-blend-mode —— "
+        "纯叠加在深色背景上金沙会显得沉闷"
+    )
+
+
+def test_reduced_motion_sand_gather_fallback(index_html: str):
+    """prefers-reduced-motion 下沙云静默，硬币直接以 HOLD 稳态数值显示。
+
+    全局通配规则 (* { animation-duration: 0.001s }) 已经把动画挤到 0.001s，
+    但显式 fallback 是"规则链防御层"+ 可读性 + 测试锚点。"""
+    m = re.search(
+        r"@media\s*\(\s*prefers-reduced-motion:\s*reduce\s*\)\s*\{(.*?)\n\}\s*(?:\n|</style>)",
+        index_html,
+        re.S,
+    )
+    assert m, "找不到 @media (prefers-reduced-motion: reduce) 规则块"
+    body = m.group(1)
+    # gathering ::before 应被显式置 opacity 0（沙云静默）
+    assert re.search(
+        r"\.coin-wrap\.gathering::before[^}]*?opacity:\s*0",
+        body,
+        re.S,
+    ), "reduced-motion 下应显式设 .coin-wrap.gathering::before { opacity: 0 }"
+    # gathering 下 .coin-spin 应显式落在 HOLD 稳态数值（与 coin-crystallize 100% 一致）
+    assert re.search(
+        r"\.coin-wrap\.gathering\s+\.coin-spin[^}]*?"
+        r"opacity:\s*0\.82[^}]*?"
+        r"scale\(0\.94\)[^}]*?"
+        r"blur\(6px\)",
+        body,
+        re.S,
+    ), (
+        "reduced-motion 下 .coin-wrap.gathering .coin-spin 应显式落到 HOLD 稳态 "
+        "(opacity 0.82 / scale 0.94 / blur 6px)"
+    )
+
+
 def test_all_hexagrams_page_hex_data_matches_backend():
     """dev-tools/all-hexagrams.js 的 HEX_DATA 必须和 backend HEXAGRAMS 严格一致。
 
