@@ -1186,13 +1186,25 @@ def test_manual_mode_shake_thresholds_defined(app_js: str):
 
 
 def test_manual_toss_state_machine_keywords_present(app_js: str):
-    """awaitManualToss 应含 HOLD / SHAKING / QUIET_WAIT 状态关键字。
-    防重构时状态机被压平成简单单阈值触发（那样又会串爆）。"""
+    """awaitManualToss 应含 HOLD / SHAKING / QUIET_WAIT 的真实状态迁移分支。
+
+    不只搜全文字符串（那样注释里写"// HOLD"也能过，Codex adversarial review
+    MEDIUM finding），而是要求每个关键字都以 state===/==/= 'X' 的赋值或分支
+    判断形式出现 —— 保证状态机真的被这个 token 驱动。"""
     assert re.search(r"function\s+awaitManualToss\s*\(", app_js), (
         "缺少 awaitManualToss —— 手摇分支应从 awaitShakeSettle 分出独立状态机"
     )
     for keyword in ("HOLD", "SHAKING", "QUIET_WAIT"):
-        assert keyword in app_js, f"awaitManualToss 缺少状态关键字 {keyword!r}"
+        # 要求至少一次 state === 'KEYWORD' 或 state = 'KEYWORD' 或三元 'KEYWORD'
+        # （QUIET_WAIT 是 isFirst ? 'HOLD' : 'QUIET_WAIT' 形式）
+        pattern = (
+            rf"\bstate\s*(?:===|==|=)\s*['\"]{keyword}['\"]"
+            rf"|\?\s*['\"][A-Z_]+['\"]\s*:\s*['\"]{keyword}['\"]"
+        )
+        assert re.search(pattern, app_js), (
+            f"awaitManualToss 缺少状态 {keyword!r} 的真实赋值/分支 —— "
+            "只在注释/文档字符串里出现不算数"
+        )
 
 
 def test_shake_detector_arms_on_manual_mode(app_js: str):
@@ -1215,11 +1227,34 @@ def test_shake_detector_arms_on_manual_mode(app_js: str):
 
 def test_no_motion_fallback_hint_present(app_js: str):
     """无 devicemotion 事件时的 click fallback 提示 —— 覆盖 Android HTTP /
-    桌面 / iOS 权限拒绝三种情况。用户反馈"不只考虑 iOS，还有 Android"。"""
-    assert "_motionEverFired" in app_js, (
-        "缺少 _motionEverFired 标志 —— 无法判断当前设备是否真的能摇"
+    桌面 / iOS 权限拒绝三种情况。
+
+    收紧（Codex adversarial review MEDIUM finding）：不仅要求两个 flag 存在，
+    还要求 fallback 文案真的在 NO_MOTION_HINT_MS 触发的 setTimeout 回调里，
+    并且早退条件同时含 _motionEverFired（witness）+ _motionSupported（capability）——
+    只检查 witness 会把"已授权但用户还没动"误判为"摇不动"（原 LOW finding）。"""
+    assert "_motionEverFired" in app_js, "缺少 witness 标志 _motionEverFired"
+    assert "_motionSupported" in app_js, (
+        "缺少 capability 标志 _motionSupported —— 无法区分"
+        "设备能力 vs 是否收到过首个事件"
     )
-    assert "点击铜钱" in app_js, "缺少无 devicemotion 时的点击 fallback 提示文案"
+    # fallback 文案必须绑定在 NO_MOTION_HINT_MS 的 setTimeout 体内
+    # 用 .*? + 唯一终结符 NO_MOTION_HINT_MS 精确切出回调体（允许嵌套花括号）
+    m = re.search(
+        r"setTimeout\s*\(\s*function\s*\(\s*\)\s*\{(.*?)\},\s*NO_MOTION_HINT_MS",
+        app_js,
+        re.S,
+    )
+    assert m, (
+        "缺少 NO_MOTION_HINT_MS 驱动的 fallback setTimeout —— "
+        "文案必须在 timer 回调里（证明有 2s 延迟兜底路径），不是纯字符串"
+    )
+    body = m.group(1)
+    assert "_motionEverFired" in body and "_motionSupported" in body, (
+        "fallback timer 的早退条件应同时检查 witness + capability —— "
+        "缺 capability 会让已授权但没摇的用户误看到 fallback 文案"
+    )
+    assert "点击铜钱" in body, "fallback timer 体内缺少点击 fallback 提示文案"
 
 
 def test_toss_phase_css_present(index_html: str):
@@ -1260,7 +1295,11 @@ def test_start_divine_sets_toss_phase(app_js: str):
 
 def test_manual_inter_line_rest_longer_than_auto(app_js: str):
     """手摇模式爻间屏息应比自动更长 —— 给用户"呼吸一次"再摇下一爻。
-    防回归：有人可能统一节奏时把 1000ms 退回 700ms。"""
+
+    收紧（Codex adversarial review MEDIUM finding）：要求 1000 出现在 sleep()
+    调用或 _restMs 赋值里，且上下文包含 divineMode === 'manual' 分支——
+    防止"只在注释里写 1000"或"把 1000 挪进了某个无关 literal"就通过。
+    同时断言 700 仍作为自动模式基准存在，锁定"手摇 > 自动"的节奏不等式。"""
     m = re.search(
         r"async\s+function\s+startDivine\s*\([^)]*\)\s*\{(.*?)\n\}",
         app_js,
@@ -1268,9 +1307,130 @@ def test_manual_inter_line_rest_longer_than_auto(app_js: str):
     )
     assert m, "找不到 startDivine 函数体"
     body = m.group(1)
-    # 节奏判断：手摇分支里必须出现 1000（或更长）ms 的 sleep
-    assert re.search(r"\b1000\b", body), (
-        "startDivine 手摇分支应有 1000ms 屏息（现有是 700ms 通用）"
+    # manual 分支的节奏判断
+    assert re.search(r"divineMode\s*===?\s*['\"]manual['\"]", body), (
+        "startDivine 需按 divineMode === 'manual' 分支走不同节奏"
+    )
+    # 1000 必须出现在 sleep() 实参或 _restMs 三元结果里，而非注释
+    assert re.search(
+        r"sleep\s*\(\s*1000\s*\)"
+        r"|_restMs\s*=\s*\([^)]*?1000[^)]*?\)"
+        r"|_restMs\s*=\s*[^;]*?\?\s*1000",
+        body,
+    ), (
+        "startDivine 手摇分支应有 1000ms 屏息的真实调用 "
+        "（sleep(1000) 或 _restMs = ... ? 1000 : 700 形式）"
+    )
+    # 自动模式的 700ms 作为对照基准必须仍在
+    assert re.search(r"\b700\b", body), (
+        "startDivine 应保留 700ms 作为自动模式的对照节奏 "
+        "（确保「手摇 > 自动」的不等式不退化）"
+    )
+
+
+def test_toss_cleanup_is_synchronous_abort(app_js: str):
+    """awaitManualToss 的取消路径必须同步，不能用 setInterval 轮询。
+
+    Codex adversarial review HIGH finding：原实现用 setInterval(cancelPoll, 150)
+    检测 _divineSeq 变化，cancelCurrentDivine 后最多 150ms 里 onClick / _shakeSubs
+    的老回调还活着，用户快速返回再起卦会被老监听污染新 run 的 UI。
+
+    修复：暴露 _currentTossCleanup 同步句柄，cancelCurrentDivine 和 startDivine
+    入口直接调用它立即解绑。"""
+    # 同步 abort 句柄必须存在
+    assert "_currentTossCleanup" in app_js, (
+        "缺少同步 abort 句柄 _currentTossCleanup —— cancel 路径仍依赖 150ms 轮询"
+    )
+    # cancelCurrentDivine 必须同步调用 cleanup（不是靠 _divineSeq++ 间接触发）
+    m = re.search(
+        r"function\s+cancelCurrentDivine\s*\(\s*\)\s*\{(.*?)\n\}",
+        app_js,
+        re.S,
+    )
+    assert m, "找不到 cancelCurrentDivine 函数体"
+    cancel_body = m.group(1)
+    assert "_currentTossCleanup" in cancel_body, (
+        "cancelCurrentDivine 必须同步调用 _currentTossCleanup —— "
+        "否则老 onClick / _shakeSubs 在 _divineSeq++ 后仍存活"
+    )
+    # startDivine 入口同样要清（防旁路触发的悬挂 toss）
+    sd = re.search(
+        r"async\s+function\s+startDivine\s*\([^)]*\)\s*\{(.*?)\n\}",
+        app_js,
+        re.S,
+    )
+    assert sd, "找不到 startDivine 函数体"
+    sd_body = sd.group(1)
+    assert "_currentTossCleanup" in sd_body, (
+        "startDivine 入口应先清上一次 _currentTossCleanup —— "
+        "Enter 键 / 程序化触发能绕过 btn.disabled，需要双保险"
+    )
+    # 不得再有 150ms poll 残留（会和同步通道重复触发 cleanup）
+    assert not re.search(
+        r"setInterval\s*\([^}]*?getCancelled[^}]*?150", app_js, re.S
+    ), (
+        "awaitManualToss 里仍存在 150ms 轮询 getCancelled —— "
+        "应已改为 _currentTossCleanup 同步通道"
+    )
+
+
+def test_peak_haptic_debounce_is_per_yao(app_js: str):
+    """SHAKE 峰值回响去抖 (lastPeakHaptic) 必须是 awaitManualToss 闭包局部变量。
+
+    Codex adversarial review MEDIUM finding：若把 lastPeakHaptic 提升为模块级
+    共享状态，第 N 爻的 200ms 去抖窗口会延续到第 N+1 爻，第二爻第一次峰值
+    可能因 now-lastPeakHaptic < 200ms 被吞掉。测试钉住"每爻独立 debounce"。"""
+    # 闭包局部声明：在 awaitManualToss 函数头段（finish 函数之前）里
+    m = re.search(
+        r"function\s+awaitManualToss\s*\([^)]*\)\s*\{.*?"
+        r"(var|let|const)\s+lastPeakHaptic\s*=\s*0",
+        app_js,
+        re.S,
+    )
+    assert m, (
+        "lastPeakHaptic 必须在 awaitManualToss 函数体内声明为闭包局部变量 —— "
+        "闭包局部才保证每爻进入时 debounce 窗口重置为 0"
+    )
+    # 模块级不得有同名全局（否则会 shadow/污染跨爻状态）
+    assert not re.search(r"^(var|let|const)\s+lastPeakHaptic\b", app_js, re.M), (
+        "lastPeakHaptic 不应声明为模块级全局 —— 会让 debounce 跨爻共享"
+    )
+
+
+def test_motion_supported_set_on_detector_arm(app_js: str):
+    """_motionSupported 应在 armShakeDetector 成功挂 listener 时置 true，
+    在 iOS requestPermission denied/catch 分支置 false。
+
+    Codex adversarial review LOW finding：原 _motionEverFired 把"设备能力"
+    等同于"本 session 至少收过一次事件"，已授权但还没摇的用户会看到错的
+    fallback 文案。修复：capability 基于 arm 成功，不再基于 first-event witness。"""
+    # armShakeDetector 函数体内必须置 _motionSupported = true
+    m = re.search(
+        r"function\s+armShakeDetector\s*\(\s*\)\s*\{(.*?)\n\}",
+        app_js,
+        re.S,
+    )
+    assert m, "找不到 armShakeDetector 函数体"
+    arm_body = m.group(1)
+    assert re.search(r"_motionSupported\s*=\s*true", arm_body), (
+        "armShakeDetector 应在挂 listener 成功后置 _motionSupported = true"
+    )
+    # requestPermission 的 denied 分支（else）或 catch 分支必须显式置 false
+    # 用 [^{}]*? 避免跨越嵌套块，精确定位"分支体内部"
+    denied_ok = re.search(
+        r"\}\s*else\s*\{[^{}]*?_motionSupported\s*=\s*false",
+        app_js,
+        re.S,
+    )
+    catch_ok = re.search(
+        r"\.catch\s*\(\s*function\s*\([^)]*\)\s*\{[^{}]*?_motionSupported\s*=\s*false",
+        app_js,
+        re.S,
+    )
+    assert denied_ok or catch_ok, (
+        "setDivineMode 的 requestPermission denied/catch 分支应显式置 "
+        "_motionSupported = false —— 否则拒权路径永远卡在初值 false"
+        "（虽然初值对，但没显式表意会让 review 看不出意图）"
     )
 
 
