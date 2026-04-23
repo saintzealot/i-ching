@@ -37,6 +37,25 @@ var isDivining = false;
 var divineMode = 'auto';           // 'auto' | 'manual' — 见 setDivineMode / awaitShakeSettle
 var _motionPermissionRequested = false; // iOS 的 DeviceMotionEvent.requestPermission 只请求一次
 var hexagramsCache = null;
+
+/* 手摇模式状态机阈值 —— 详见 awaitManualToss 头注释。
+ * HI/LO 双阈值是迟滞（hysteresis）设计：防止加速度在阈值线上方的小抖动反复触发；
+ * MIN_SHAKE_MS 与用户的生理手势时长解耦，给每一次"摇"至少 600ms 的视觉演出。 */
+var SHAKE_HI = 18;            // 进入 SHAKING 的加速度阈值 (m/s²)
+var SHAKE_LO = 6;             // 判定 "静止" 的加速度阈值
+var MIN_SHAKE_MS = 600;       // 每爻摇动阶段最短视觉持续时间
+var QUIET_MS = 300;           // 爻间静候：连续 mag<LO 达到此时长才允许下一爻
+var NO_MOTION_HINT_MS = 2000; // 进入手摇模式 N ms 内无 devicemotion 事件则提示 fallback
+
+/* 手摇检测器：setDivineMode('manual') 挂 / setDivineMode('auto') 摘；
+ * awaitManualToss 通过 subscribeShake 订阅加速度采样做状态机。
+ *
+ * _motionEverFired 是整个 session 的"有没有收到过 devicemotion"标志，用于：
+ * 1. Android HTTP / 桌面 / 权限拒绝 —— 值永远是 false，UI 切到点击 fallback 文案
+ * 2. 正常 iOS/Android HTTPS —— 第一个事件就 true，不会误提示 */
+var _motionEverFired = false;
+var _shakeSubs = [];
+var _motionListenerActive = false;
 var _currentInterpWs = null;
 var _interpSeq = 0;
 var _divineSeq = 0;   // 镜像 _interpSeq：中途切换视图时丢弃老 startDivine 的回调
@@ -376,64 +395,250 @@ function buildCoinSvg(size, face) {
   return svgFromString(parts.join(''));
 }
 
-/* 等待一爻"落定"触发 —— startDivine 每爻循环内调用
+/* 设备加速度全局监听 —— setDivineMode 控制挂/摘。
+ * 原始 mag 采样分发给所有 subscribeShake 回调（awaitManualToss 通过它做状态机）。 */
+function _onDeviceMotion(e) {
+  _motionEverFired = true;
+  var a = e.acceleration || e.accelerationIncludingGravity;
+  if (!a) return;
+  var mag = Math.hypot(a.x || 0, a.y || 0, a.z || 0);
+  for (var i = _shakeSubs.length - 1; i >= 0; i--) {
+    try { _shakeSubs[i](mag); } catch (_) { /* no-op */ }
+  }
+}
+
+function armShakeDetector() {
+  if (_motionListenerActive) return;
+  if (typeof window.DeviceMotionEvent === 'undefined') return;
+  window.addEventListener('devicemotion', _onDeviceMotion);
+  _motionListenerActive = true;
+}
+
+function disarmShakeDetector() {
+  if (!_motionListenerActive) return;
+  window.removeEventListener('devicemotion', _onDeviceMotion);
+  _motionListenerActive = false;
+}
+
+function subscribeShake(fn) {
+  _shakeSubs.push(fn);
+  return function () {
+    var i = _shakeSubs.indexOf(fn);
+    if (i >= 0) _shakeSubs.splice(i, 1);
+  };
+}
+
+/* 统一切换"握/摇/落"三段视觉状态 —— CSS 通过
+ * `#shakeProgress[data-toss-phase="..."]` 选择器驱动铜钱区样式变化。
  *
- * 自动模式：等一个 timer tick（600ms），与重构前行为一致；
- * 手摇模式：返回一个 Promise，直到用户点击铜钱区 或 摇动手机到阈值后 resolve。
+ * 同时同步顶部 active dash 的子 class，使 6 段 dash 进度条变成节拍器：
+ *   hold/null → 纯 .active（呼吸脉冲）
+ *   shake     → .active.active-shake（实心亮金，脉冲停）
+ *   land      → .active.active-land（一次 ping 闪烁）
+ * 用户扫顶部一眼就知道当前爻在哪个阶段，不用读文字。 */
+function setTossPhase(phase) {
+  var sp = $('shakeProgress');
+  if (!sp) return;
+  if (phase) sp.setAttribute('data-toss-phase', phase);
+  else sp.removeAttribute('data-toss-phase');
+
+  var bars = $('tossBars');
+  if (!bars) return;
+  var active = bars.querySelector('span.active');
+  if (!active) return;
+  active.classList.remove('active-shake', 'active-land');
+  if (phase === 'shake') active.classList.add('active-shake');
+  else if (phase === 'land') active.classList.add('active-land');
+}
+
+/* 归位动作：LAND 态（各枚硬币在 seededLayout 给出的随机位置）→ HOLD 态。
+ * 每枚硬币向 coinsRow 中心方向收拢 35%，同步 halo 升起 + blur 加深，
+ * 500ms 内完成。用户反馈核心："应该要先归位，同步光晕升起让硬币变得模糊"。
  *
- * 两种模式都要兼容 _divineSeq 取消机制 —— 若中途 cancelCurrentDivine 被调用，
- * 本次 Promise 会被 checkpoint() 在外层抛出的 sentinel 打断（因为 Promise
- * 尚未 resolve 时 await 会一直挂起，而 cancelCurrentDivine 的同步路径会让
- * 下一次 checkpoint() 抛 __divine_cancelled；此处额外在 cleanup 里再加一
- * 个"取消订阅"兜底，避免手摇阶段用户切历史后监听器残留）。
+ * 实现要点：
+ *   - 不重建 DOM，直接在当前 .just-landed 的 wrap 上做 class 切换
+ *   - 每枚 wrap 各自算 (dx, dy) 相对 coinsRow 中心的"收拢向量"，
+ *     写入 CSS 变量 --home-dx / --home-dy
+ *   - CSS 的 .coin-wrap.holding.regathering 通过 translate: var(--home-dx, 0)...
+ *     + transition: translate 500ms 把"归位移动"表达成 compositor-friendly 的
+ *     translate 过渡（GPU 路径，不触发 layout reflow）
+ *   - .holding 同时被加上：halo-hold-fade-in 500ms 自动跑，coin-spin 的
+ *     filter blur/opacity 通过 transition 同步过渡 */
+function startRegather() {
+  var wraps = $('coinsRow').querySelectorAll('.coin-wrap.just-landed');
+  if (!wraps.length) return;
+  var row = $('coinsRow');
+  var rowRect = row.getBoundingClientRect();
+  var cx = rowRect.width / 2;
+  var cy = rowRect.height / 2;
+  for (var i = 0; i < wraps.length; i++) {
+    var w = wraps[i];
+    var wRect = w.getBoundingClientRect();
+    var wx = wRect.left + wRect.width / 2 - rowRect.left;
+    var wy = wRect.top + wRect.height / 2 - rowRect.top;
+    // 收拢 35% —— 三枚向中心靠但仍能分辨是三枚（太近视觉重叠，太远感觉不到"归位"）
+    var dx = (cx - wx) * 0.35;
+    var dy = (cy - wy) * 0.35;
+    w.style.setProperty('--home-dx', dx + 'px');
+    w.style.setProperty('--home-dy', dy + 'px');
+    w.classList.remove('just-landed');
+    w.classList.add('holding', 'regathering');
+  }
+}
+
+/* 把当前 .coin-wrap 从"握"态切到"摇"态（或反向）。
+ * 不重建 DOM，只换 class —— 避免 SVG 重新构建导致的一帧闪烁。 */
+function coinsEnterShake() {
+  var wraps = $('coinsRow').querySelectorAll('.coin-wrap');
+  for (var i = 0; i < wraps.length; i++) {
+    wraps[i].classList.remove('holding');
+    wraps[i].classList.add('shaking');
+  }
+}
+/* coinsEnterHold(opts)
+ *   opts.entering=true → 同时加 .entering 瞬态类，CSS 里 @keyframes holding-enter
+ *     跑一次 500ms 把铜钱从"无"（opacity 0 / scale 0.82 / blur 10px）渐显到
+ *     HOLD 稳态（0.82 / 0.94 / 6px）。520ms 后清除 .entering 让稳态 animation
+ *     (coin-breathe + coin-hold-drift) 接手。
+ *   不传参数 → 只做 shaking/just-landed → holding 的 class 切换（用于非入场路径）。 */
+function coinsEnterHold(opts) {
+  var entering = !!(opts && opts.entering);
+  var wraps = $('coinsRow').querySelectorAll('.coin-wrap');
+  for (var i = 0; i < wraps.length; i++) {
+    wraps[i].classList.remove('shaking', 'just-landed');
+    wraps[i].classList.add('holding');
+    if (entering) wraps[i].classList.add('entering');
+  }
+  if (entering) {
+    setTimeout(function () {
+      var ws = $('coinsRow').querySelectorAll('.coin-wrap.entering');
+      for (var j = 0; j < ws.length; j++) ws[j].classList.remove('entering');
+    }, 520);
+  }
+}
+
+/* 等待一爻"落定"触发 —— startDivine 每爻循环内调用。
+ * divineMode 分发：auto 走固定 600ms timer，manual 走手势状态机。
+ * 返回 Promise<{peakMag}> —— peakMag 留给未来可能的"强度映射"特性消费。
+ *
+ * isFirst 仅对 manual 生效：第一爻跳过"静候门槛"（此时用户才刚按下起卦）。 */
+function awaitShakeSettle(getCancelled, isFirst) {
+  if (divineMode === 'auto') {
+    return sleep(600).then(function () { return { peakMag: 0 }; });
+  }
+  return awaitManualToss(getCancelled, isFirst);
+}
+
+/* 手摇模式单爻状态机：
+ *
+ *   QUIET_WAIT ──(mag<LO 持续 QUIET_MS)──▶ HOLD ──(mag>HI)──▶ SHAKING ──┐
+ *        ▲                                                               │
+ *        └───────── mag≥LO 重置 quiet 计时（UI 提示"请持稳手机"）         │
+ *                                                                        │
+ *        SHAKING ──(经过 MIN_SHAKE_MS 且 mag<LO)──▶ resolve              │
+ *        SHAKING ──────────────────────────────────────────────────────┘
+ *
+ * isFirst=true 跳过 QUIET_WAIT 直接进 HOLD（第一爻用户刚按下起卦，谈不上"上一爻余震"）。
+ *
+ * 兜底：coinStage 点击任意阶段都强制推进；即使走点击 bypass 也强制最小
+ * MIN_SHAKE_MS 的视觉演出（否则仪式感塌）。覆盖桌面 / Android HTTP / 权限拒绝。
  */
-function awaitShakeSettle(getCancelled) {
-  if (divineMode === 'auto') return sleep(600);
-
-  // 手摇模式 UI 提示
-  $('tossHint').textContent = '轻摇手机 或 点击铜钱';
-
+function awaitManualToss(getCancelled, isFirst) {
   return new Promise(function (resolve) {
-    var area = $('coinStage');
+    var state = isFirst ? 'HOLD' : 'QUIET_WAIT';
+    var quietSince = Date.now();
+    var riseStartMs = 0;
+    var peakMag = 0;
+    var lastPeakHaptic = 0;  // SHAKE 峰值回响去抖：200ms 内只震一次
     var settled = false;
+    var coinStage = $('coinStage');
 
-    function settle() {
+    function holdHintText() {
+      return _motionEverFired
+        ? '持铜钱 · 轻摇可得一爻'
+        : '持铜钱 · 摇手机或点击铜钱';
+    }
+
+    $('tossHint').textContent = (state === 'HOLD') ? holdHintText() : '请持稳手机';
+
+    // 2s 内仍无 devicemotion 事件就切"点击铜钱"fallback 文案
+    //（覆盖 Android HTTP / 桌面 / iOS 用户拒权）
+    var noMotionHintTimer = setTimeout(function () {
+      if (settled || _motionEverFired) return;
+      if (state !== 'SHAKING') {
+        $('tossHint').textContent = '摇不动？点击铜钱区也可定爻';
+      }
+    }, NO_MOTION_HINT_MS);
+
+    function enterShaking(initialMag) {
+      if (state === 'SHAKING') return;
+      state = 'SHAKING';
+      riseStartMs = Date.now();
+      peakMag = initialMag || 0;
+      setTossPhase('shake');
+      coinsEnterShake();
+      $('tossHint').textContent = '凝神摇卦…';
+      haptic(30);
+    }
+
+    function finish() {
       if (settled) return;
       settled = true;
-      cleanup();
-      resolve();
-    }
-    function cleanup() {
-      area.removeEventListener('click', settle);
-      window.removeEventListener('devicemotion', onMotion);
-      if (_cancelPoll) clearInterval(_cancelPoll);
+      unsub();
+      coinStage.removeEventListener('click', onClick);
+      clearInterval(cancelPoll);
+      clearTimeout(noMotionHintTimer);
+      resolve({ peakMag: peakMag });
     }
 
-    // 点击铜钱区触发落定（所有平台通用）
-    area.addEventListener('click', settle);
-
-    // 设备晃动触发落定（iOS/Android 支持 DeviceMotion 时）
-    //
-    // 阈值选择权衡（accelerationIncludingGravity 包含 ~9.8 m/s² 重力基线）：
-    //   < 14 m/s²：静置时就可能误触（地铁/颠簸都触发）
-    //   ~18 m/s²：轻快一甩即可触发，腕表级别动作（当前选择）
-    //   > 25 m/s²：需要剧烈挥动，仪式感强但用力过猛
-    // 优先用 e.acceleration（扣除重力更准），缺失时 fallback 到 IncludingGravity
-    var SHAKE_THRESHOLD = 18;
-    function onMotion(e) {
-      var a = e.acceleration || e.accelerationIncludingGravity;
-      if (!a) return;
-      var mag = Math.hypot(a.x || 0, a.y || 0, a.z || 0);
-      if (mag > SHAKE_THRESHOLD) settle();
+    // 点击 bypass：任何阶段点击铜钱都强制走完 SHAKE 最小视觉再 resolve
+    function onClick() {
+      if (settled) return;
+      if (state !== 'SHAKING') enterShaking(0);
+      var elapsed = Date.now() - riseStartMs;
+      var remaining = Math.max(0, MIN_SHAKE_MS - elapsed);
+      setTimeout(finish, remaining);
     }
-    if (typeof window.DeviceMotionEvent !== 'undefined') {
-      window.addEventListener('devicemotion', onMotion);
-    }
+    coinStage.addEventListener('click', onClick);
 
-    // 兜底：若外层 cancelCurrentDivine 递增了 seq，释放监听器并 resolve
-    // （外层下一次 checkpoint() 会抛 sentinel 打断流程）
-    var _cancelPoll = setInterval(function () {
-      if (getCancelled && getCancelled()) { cleanup(); resolve(); }
+    var unsub = subscribeShake(function (mag) {
+      if (settled) return;
+      var now = Date.now();
+
+      if (state === 'QUIET_WAIT') {
+        if (mag < SHAKE_LO) {
+          if (now - quietSince >= QUIET_MS) {
+            state = 'HOLD';
+            $('tossHint').textContent = holdHintText();
+          }
+        } else {
+          quietSince = now;
+          $('tossHint').textContent = '请持稳手机';
+        }
+        return;
+      }
+
+      if (state === 'HOLD') {
+        if (mag > SHAKE_HI) enterShaking(mag);
+        return;
+      }
+
+      if (state === 'SHAKING') {
+        if (mag > peakMag) peakMag = mag;
+        // 峰值回响：每次越过 HI 阈值给一次 haptic(8) 轻震，200ms 去抖避免密集。
+        // 表达"铜钱感知到腕部动作"的物理回响，不是 UI 状态信号。
+        // 与落定阶段的 haptic(18) 幅度错开，用户能听出"摇→落"的分层。
+        if (mag > SHAKE_HI && (now - lastPeakHaptic) > 200) {
+          haptic(8);
+          lastPeakHaptic = now;
+        }
+        if ((now - riseStartMs) >= MIN_SHAKE_MS && mag < SHAKE_LO) finish();
+        return;
+      }
+    });
+
+    var cancelPoll = setInterval(function () {
+      if (getCancelled && getCancelled()) finish();
     }, 150);
   });
 }
@@ -547,9 +752,6 @@ async function startDivine() {
       $('tossLabel').textContent = '第 ' + tossNames[idx] + ' 爻';
       $('tossCount').textContent = (idx + 1) + ' / 6';
       $('tossInstr').textContent = '凝神静候';
-      $('tossHint').textContent = divineMode === 'manual'
-        ? '轻摇手机 或 点击铜钱'
-        : '铜钱自行翻转中…';
       $('coinResult').textContent = '';
 
       var bars = barsBox.children;
@@ -557,13 +759,29 @@ async function startDivine() {
         bars[j].className = j < idx ? 'done' : (j === idx ? 'active' : '');
       }
 
-      // 晃动阶段 — 铜钱面持续随机翻转直到进入落定触发
+      // 手摇 vs 自动：初始视觉态不同
+      //   手摇 = HOLD 态（铜钱聚拢静置，等用户摇）
+      //   自动 = 直接进 SHAKE 态（铜钱持续随机翻转 600ms 后落定）
       var shakingFaces = [Math.random() > 0.5, Math.random() > 0.5, Math.random() > 0.5];
-      renderCoins(shakingFaces, Date.now() + idx, true);
-      await awaitShakeSettle(function () { return mySeq !== _divineSeq; });
+      if (divineMode === 'manual') {
+        setTossPhase('hold');
+        renderCoins(shakingFaces, Date.now() + idx, false);
+        // entering:true 触发 500ms 渐显动画，消除"铜钱突然冒出"的闪帧。
+        coinsEnterHold({ entering: true });
+        $('tossHint').textContent = _motionEverFired
+          ? '持铜钱 · 轻摇可得一爻'
+          : '持铜钱 · 摇手机或点击铜钱';
+      } else {
+        setTossPhase('shake');
+        renderCoins(shakingFaces, Date.now() + idx, true);
+        $('tossHint').textContent = '铜钱自行翻转中…';
+      }
+
+      await awaitShakeSettle(function () { return mySeq !== _divineSeq; }, idx === 0);
       checkpoint();
 
       // 落定阶段 — 按真实爻值
+      setTossPhase('land');
       var lineVal = lines[idx];
       var faces = Core.coinsForLine(lineVal);
       // 洗牌使视觉上位置不固定
@@ -625,8 +843,27 @@ async function startDivine() {
       $('coinResult').textContent = Core.formatCoinResult(faces);
       appendYaoToHexPreview(lineVal);
 
-      await sleep(700);
-      checkpoint();
+      // 爻间屏息：
+      //   手摇 + 非末爻：拆 1000ms 为 450ms 全亮 "阳爻" + 550ms 过渡文案，
+      //                   消除"这爻结束了吗"的不确定感，配合顶部 dash
+      //                   .active-land → .done 的过渡双通道表达"正在推进"。
+      //   手摇末爻 / 自动：保持整段 sleep —— 末爻后接 sleep(520) 进结果页，
+      //                   已经是叙事过渡；自动连续节奏不需要中间叙事。
+      // 无论哪条路径，awaitManualToss 的 QUIET_WAIT 仍能兜住用户持续晃动的情况。
+      if (divineMode === 'manual' && idx < 5) {
+        await sleep(450);
+        checkpoint();
+        // 启动"归位"动作 —— 3 枚落定硬币向中心收拢，同步 halo 升起 + blur 加深。
+        // 450ms 已经让用户充分读到"阳爻"，现在进入过渡态。
+        startRegather();
+        $('tossHint').textContent = '凝神片刻 · 下一爻蓄势';
+        await sleep(550);
+        checkpoint();
+      } else {
+        var _restMs = (divineMode === 'manual') ? 1000 : 700;
+        await sleep(_restMs);
+        checkpoint();
+      }
     }
 
     var barsAll = $('tossBars').children;
@@ -644,6 +881,7 @@ async function startDivine() {
     $('baguaStage').classList.remove('mode-shake');
     $('coinStage').setAttribute('aria-hidden', 'true');
     $('shakeProgress').setAttribute('aria-hidden', 'true');
+    setTossPhase(null);
 
     app.classList.add('has-result');
     // 先占位保存（此时 interpretation 还是后端象辞）；AI 流式完成后再回写真实解读
@@ -660,12 +898,14 @@ async function startDivine() {
       app.classList.remove('is-shaking');
       app.removeAttribute('data-mode');
       $('baguaStage').classList.remove('mode-shake');
+      setTossPhase(null);
       showError('算卦请求超时（10 秒）。请检查网络或稍后重试。');
       return;
     }
     app.classList.remove('is-shaking');
     app.removeAttribute('data-mode');
     $('baguaStage').classList.remove('mode-shake');
+    setTossPhase(null);
     showError('算卦失败：' + e.message + '。请检查后端服务是否启动。');
   } finally {
     // 清理 timeout 防泄漏（正常路径已 clearTimeout，这里是异常路径保险）
@@ -942,6 +1182,7 @@ function cancelCurrentDivine() {
   $('baguaStage').classList.remove('mode-shake');
   $('coinStage').setAttribute('aria-hidden', 'true');
   $('shakeProgress').setAttribute('aria-hidden', 'true');
+  setTossPhase(null);
   $('btnDivine').disabled = false;
   document.querySelectorAll('.df-mode').forEach(function (b) { b.disabled = false; });
 }
@@ -998,15 +1239,23 @@ function setDivineMode(mode) {
   // 便于 CSS 通过 [data-mode] 做视觉提示（如手摇模式下铜钱区显 pointer）
   $('app').setAttribute('data-mode', mode);
 
-  // iOS 13+ 的 DeviceMotionEvent.requestPermission 必须在用户手势里调一次
-  if (mode === 'manual'
-      && !_motionPermissionRequested
-      && typeof DeviceMotionEvent !== 'undefined'
-      && typeof DeviceMotionEvent.requestPermission === 'function') {
-    _motionPermissionRequested = true;
-    DeviceMotionEvent.requestPermission().catch(function () {
-      // 用户拒绝或平台不支持都静默 fallback 到点击触发
-    });
+  if (mode === 'manual') {
+    // iOS 13+ 的 DeviceMotionEvent.requestPermission 必须在用户手势里调一次。
+    // Android / iOS<13 没有这个方法，跳过即可 —— 直接 armShakeDetector 开始听。
+    if (!_motionPermissionRequested
+        && typeof DeviceMotionEvent !== 'undefined'
+        && typeof DeviceMotionEvent.requestPermission === 'function') {
+      _motionPermissionRequested = true;
+      DeviceMotionEvent.requestPermission().then(function (res) {
+        if (res === 'granted') armShakeDetector();
+        // 拒绝 / 不支持都静默 fallback 到点击（awaitManualToss 里 onClick 兜底）
+      }).catch(function () { /* no-op */ });
+    } else {
+      armShakeDetector();
+    }
+  } else {
+    // 切回自动：释放监听节电（再切回手摇时会重挂）
+    disarmShakeDetector();
   }
 }
 document.querySelectorAll('.df-mode').forEach(function (b) {

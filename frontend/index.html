@@ -278,9 +278,14 @@ button { touch-action: manipulation; }
 .coin-wrap {
   position: absolute;
   z-index: 1;
+  /* translate 属性必须单列 transition —— CSS Transforms Level 2 把 translate
+   * 与 transform 解耦，不会被 `transform 0.5s` 覆盖。不加这条，.regathering
+   * 类被 coinsEnterShake() 删除瞬间 translate 会从 var(--home-dx,dy) 突变回 0，
+   * 眼睛读作"啪地散开"。 */
   transition: left 0.5s cubic-bezier(.4,.2,.3,1),
               top 0.5s cubic-bezier(.4,.2,.3,1),
               transform 0.5s cubic-bezier(.4,.2,.3,1),
+              translate 0.5s cubic-bezier(.4,.2,.3,1),
               opacity 0.3s;
 }
 /* 内层 .coin-spin 承担视觉状态（blur / scale / opacity）；不做任何旋转
@@ -339,6 +344,147 @@ button { touch-action: manipulation; }
   animation: halo-breathe 1.4s ease-in-out infinite alternate;
   pointer-events: none;
   z-index: -1;
+}
+
+/* 手摇模式 HOLD 态：铜钱"收拢入迷雾" —— 持续性环境动画表达"系统活着在等你"。
+ *
+ * 稳态动画（持续跑）：
+ *   coin-breathe     2.4s infinite alternate：慢呼吸 scale 缩放，像"手心微起伏"
+ *   coin-hold-drift  3.6s infinite alternate：±1.5px 微晃 translate，像"在掌心里轻漂"
+ * 入场过渡（.regathering 阶段，500ms）：
+ *   translate / filter / opacity 三者统一 500ms transition —— 落定硬币"归位"到
+ *   中心并同步入雾。
+ *
+ * 和 .shaking 的差：
+ *   .shaking  : blur 7px + coin-shake 0.2s（快速抖）+ coin-breathe 1s（快呼吸）
+ *   .holding  : blur 6px + coin-hold-drift 3.6s（慢漂）+ coin-breathe 2.4s（慢呼吸）
+ *   节奏对比（快/慢 × 抖/漂）让用户直觉感知"紧张"和"静候"的差异。 */
+.coin-wrap.holding .coin-spin {
+  animation:
+    coin-breathe 2.4s ease-in-out infinite alternate,
+    coin-hold-drift 3.6s ease-in-out infinite alternate;
+  filter: blur(6px) saturate(0.8);
+  opacity: 0.82;
+  transform: scale(0.94);
+  will-change: filter, transform, translate, opacity;
+}
+
+/* regathering：LAND→HOLD 的过渡 —— 3 枚硬币向 coinsRow 中心收拢（translate），
+ * 同步 halo 淡入 + blur 加深。--home-dx/--home-dy 由 startRegather() 算好写入。
+ * 500ms 用 ease-out 让收拢一开始快、尾部缓，像"被轻轻拾起"的弧线。 */
+.coin-wrap.holding.regathering {
+  translate: var(--home-dx, 0) var(--home-dy, 0);
+  transition: translate 500ms cubic-bezier(.25, .6, .3, 1);
+}
+.coin-wrap.holding.regathering .coin-spin {
+  transition: filter 500ms ease-out, opacity 500ms ease-out;
+}
+
+/* 入场过渡：新 3 枚 .coin-wrap 从"无"到稳态 HOLD 的 500ms 渐显。
+ * 走 animation + forwards 而不是 transition —— 稳态 .coin-wrap.holding .coin-spin
+ * 本身就带 animation: coin-breathe + coin-hold-drift 两个无限循环；
+ * .entering 的 animation 覆盖它们一次跑完，to 态的 scale/opacity/filter 与稳态
+ * 静态值（scale 0.94 / opacity 0.82 / blur 6px）精确匹配，保证 JS 移除 .entering
+ * 瞬间 coin-breathe 从 from(scale 0.94) 接上，不闪帧。 */
+.coin-wrap.holding.entering .coin-spin {
+  animation: holding-enter 500ms ease-out forwards;
+}
+@keyframes holding-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.82);
+    filter: blur(10px) saturate(0.8);
+    translate: 0 0;
+  }
+  to {
+    opacity: 0.82;
+    transform: scale(0.94);
+    filter: blur(6px) saturate(0.8);
+    /* 精确匹配 coin-hold-drift keyframes 的 0% 起点，保证 JS 移除 .entering
+     * 瞬间稳态 drift animation 从 translate -1.5px 0.5px 起步，无缝衔接。*/
+    translate: -1.5px 0.5px;
+  }
+}
+
+@keyframes coin-hold-drift {
+  0%   { translate: -1.5px  0.5px; }
+  100% { translate:  1.5px -0.5px; }
+}
+/* HOLD 态的微弱光晕 —— 比 .shaking::after 弱很多（0.12 vs 0.26），
+ * 暗示"气场在蓄积但还没激活"。光晕的强弱梯度自然引导用户的注意力曲线：
+ *   HOLD (弱) → SHAKING (浓) → LAND (无) */
+.coin-wrap.holding::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  background: radial-gradient(circle,
+    rgba(218,165,32,0.18) 0%,
+    rgba(218,165,32,0.08) 50%,
+    transparent 80%);
+  filter: blur(5px);
+  animation:
+    halo-hold-fade-in 500ms ease-out,
+    halo-hold-breathe 3.2s ease-in-out infinite alternate;
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0.7;
+}
+
+/* 表面珠光：用户反馈"流光不在边缘流动，在硬币表面，珠光感"。
+ * 做法：.coin-spin::after 覆在 SVG 之上，偏心 radial-gradient 模拟"珍珠高光点"；
+ * rotation 让高光沿球面缓慢游走（5s/圈），像真实珠光随视角移动。
+ * mix-blend-mode: overlay 让高光只提亮金属色（coin SVG 有色区域），不打扰背景。
+ * inset 6% 让高光不到边缘，贴合"珠光是在表面内侧"的材质感。
+ *
+ * 注意：父 .coin-spin 有 filter: blur(6px)（HOLD 态），这一层 ::after 也会被 blur，
+ * 实际上这是我们要的——硬边 radial-gradient 被 blur 后化成柔光，正是珠光的雾面质感。 */
+.coin-wrap.holding .coin-spin::after {
+  content: '';
+  position: absolute;
+  inset: 6%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 68% 28%,
+    rgba(255,245,220,0.55) 0%,
+    rgba(255,230,180,0.22) 22%,
+    transparent 55%
+  );
+  animation: coin-pearl-sheen 5s linear infinite;
+  mix-blend-mode: overlay;
+  pointer-events: none;
+}
+
+@keyframes halo-hold-fade-in {
+  from { opacity: 0;    }
+  to   { opacity: 0.7;  }
+}
+@keyframes halo-hold-breathe {
+  from { opacity: 0.5;  transform: scale(0.94); }
+  to   { opacity: 0.85; transform: scale(1.20); }
+}
+/* 珠光绕行：整个 ::after 旋转，偏心的高光点随之沿球面游走。
+ * 不做 scale 起伏，纯线性旋转 —— 慢而稳是"珍珠"的灵魂，
+ * 起伏反而像灯光闪烁，违背用户要的"珠光感"。 */
+@keyframes coin-pearl-sheen {
+  from { transform: rotate(0deg);   }
+  to   { transform: rotate(360deg); }
+}
+
+/* 三段式 phase 标记放在 #shakeProgress 上，方便 CSS 做更宽作用域的 UI 调整
+ * （比如爻间屏息时 tossHint 的淡化）。个体铜钱状态仍由 .coin-wrap 的 class 驱动，
+ * 两条路径互不侵扰：phase 管 UI 语义，class 管铜钱视觉。*/
+#shakeProgress[data-toss-phase="hold"] .df-hint {
+  opacity: 0.72;
+  transition: opacity 0.3s;
+}
+#shakeProgress[data-toss-phase="shake"] .df-hint {
+  opacity: 1;
+  color: var(--gold);
+  transition: opacity 0.2s, color 0.2s;
+}
+#shakeProgress[data-toss-phase="land"] .df-hint {
+  opacity: 1;
 }
 
 /* ========== 问题输入 + CTA ========== */
@@ -467,10 +613,35 @@ button { touch-action: manipulation; }
   background: var(--gold-dim);
   animation: dash-pulse 1.2s ease-in-out infinite;
 }
+/* 子状态覆盖 —— setTossPhase 在检测到 SHAKE/LAND 时加到 active 身上。
+ * 设计意图：顶部 dash 把"看不见的状态机"变成可视节拍器。
+ *   .active             = HOLD（等待用户摇）：暗金呼吸脉冲，"我在等你"
+ *   .active.active-shake = SHAKE（系统在听）：固定亮金、停脉冲、更强光晕，"我听见了"
+ *   .active.active-land  = LAND（这爻落定中）：一次 ping 闪烁（scaleY + glow），
+ *                           暗示"收束中"；后续 startDivine 循环把 class 切到 .done
+ * 无子 class 时（hold / null）保持 .active 原有 dash-pulse 呼吸。 */
+.df-dashes > span.active.active-shake {
+  background: var(--gold);
+  box-shadow: 0 0 8px rgba(201,169,97,0.7);
+  animation: none;
+}
+.df-dashes > span.active.active-land {
+  background: var(--gold);
+  box-shadow: 0 0 10px rgba(201,169,97,0.85);
+  animation: dash-land-ping 0.5s ease-out both;
+  transform-origin: center;
+}
 
 @keyframes dash-pulse {
   0%,100% { background: var(--gold-dim); box-shadow: 0 0 3px rgba(201,169,97,0.25); }
   50%     { background: var(--gold);     box-shadow: 0 0 6px rgba(201,169,97,0.55); }
+}
+/* LAND "ping"：短促脉动一次再稳下来。scaleY 拉伸 1.6 让条形有"被敲击"的弹性感。
+ * 比起横向 scale 更合适 —— dash 本身是窄条，拉高不会相互挤压。 */
+@keyframes dash-land-ping {
+  0%   { transform: scaleY(1);   box-shadow: 0 0 10px rgba(201,169,97,0.85); }
+  40%  { transform: scaleY(1.6); box-shadow: 0 0 14px rgba(201,169,97,1); }
+  100% { transform: scaleY(1);   box-shadow: 0 0 4px  rgba(201,169,97,0.4); }
 }
 
 /* 卦象 progressive preview — 顶部下方，小尺寸，从下往上追加 */
@@ -1129,12 +1300,19 @@ button { touch-action: manipulation; }
   0%, 100% { opacity: 0.5; }
   50%      { opacity: 1; }
 }
-/* 外层 shake：极轻微位移（±2px）模拟手心颤动。去掉 rotate —— 袋中摇
- * 的观感是"手心在抖"而非"铜钱在翻"。用独立 translate 属性，不覆盖
- * .coin-wrap 的 style.transform='rotate(Xdeg)'（那是位置排布的固定角度）。*/
+/* 外层 shake：极轻微旋转（±1°）模拟手心颤动。原本用 translate ±2px，
+ * 但 CSS animation 优先级 > transition，translate 被 coin-shake 独占会
+ * 覆盖 .coin-wrap 基础 translate transition —— 导致 regathering→shaking
+ * 切换时 translate 从 var(--home-dx,dy)（约 -20,-15）瞬跳到 coin-shake
+ * 起点（-2,-1），用户看到硬币从中心 18px 外瞬弹到原位，突兀。
+ *
+ * 改用 rotate 属性（CSS Transforms Level 2 独立属性）抖动，和 inline
+ * style.transform='rotate(Xdeg)' 合成叠加（非覆盖），外层 translate 属性
+ * 彻底留给基础 transition 做 regathering→shaking 的 500ms 平滑过渡。
+ * 视觉上 blur(7px) 糊团下 ±1° 旋转仍能感受到手心抖动感。*/
 @keyframes coin-shake {
-  from { translate: -2px -1px; }
-  to   { translate:  2px  1px; }
+  from { rotate: -1deg; }
+  to   { rotate:  1deg; }
 }
 /* 袋中摇：铜钱在"手心"里起伏呼吸，scale 微动模拟"被掌心包裹又松开"。
  * 零旋转 = 零眩晕源。有意识地与 halo-breathe 不同速率（1s vs 1.4s）
