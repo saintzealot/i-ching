@@ -50,12 +50,21 @@ var NO_MOTION_HINT_MS = 2000; // 进入手摇模式 N ms 内无 devicemotion 事
 /* 手摇检测器：setDivineMode('manual') 挂 / setDivineMode('auto') 摘；
  * awaitManualToss 通过 subscribeShake 订阅加速度采样做状态机。
  *
- * _motionEverFired 是整个 session 的"有没有收到过 devicemotion"标志，用于：
- * 1. Android HTTP / 桌面 / 权限拒绝 —— 值永远是 false，UI 切到点击 fallback 文案
- * 2. 正常 iOS/Android HTTPS —— 第一个事件就 true，不会误提示 */
+ * 两个状态语义刻意分开 —— Codex adversarial review 指出旧实现把能力等同见证：
+ *   _motionSupported：capability，listener 挂上 + 权限 granted 即置 true
+ *   _motionEverFired：witness，至少收到过一次真实事件
+ * 文案选择：只要 _motionSupported === true 就显示"轻摇可得一爻"，
+ * 即便用户还没动（以前会错报为"摇不动？点击铜钱"）。
+ *
+ * _currentTossCleanup：awaitManualToss 的同步 abort 句柄。cancelCurrentDivine
+ * 或 startDivine 入口调用它，立即解绑 click / _shakeSubs 监听，避免 old run
+ * 的监听器在 _divineSeq++ 之后仍然响应事件污染 new run 的共享 UI（原 150ms
+ * poll 方案在此窗口内会漏掉快速返回 → 重新起卦的竞态）。 */
 var _motionEverFired = false;
+var _motionSupported = false;
 var _shakeSubs = [];
 var _motionListenerActive = false;
+var _currentTossCleanup = null;
 var _currentInterpWs = null;
 var _interpSeq = 0;
 var _divineSeq = 0;   // 镜像 _interpSeq：中途切换视图时丢弃老 startDivine 的回调
@@ -412,6 +421,9 @@ function armShakeDetector() {
   if (typeof window.DeviceMotionEvent === 'undefined') return;
   window.addEventListener('devicemotion', _onDeviceMotion);
   _motionListenerActive = true;
+  // listener 成功挂上即视为设备支持；权限拒绝走不到这里（requestPermission
+  // 的 denied 分支会显式置 _motionSupported = false）
+  _motionSupported = true;
 }
 
 function disarmShakeDetector() {
@@ -544,27 +556,35 @@ function awaitShakeSettle(getCancelled, isFirst) {
  * MIN_SHAKE_MS 的视觉演出（否则仪式感塌）。覆盖桌面 / Android HTTP / 权限拒绝。
  */
 function awaitManualToss(getCancelled, isFirst) {
+  // 防御：若上一次 awaitManualToss 的 cleanup 尚未触发（startDivine 或
+  // cancelCurrentDivine 的入口正常会先调掉，这里是双保险），立即执行。
+  if (_currentTossCleanup) {
+    try { _currentTossCleanup(); } catch (_) { /* no-op */ }
+  }
   return new Promise(function (resolve) {
     var state = isFirst ? 'HOLD' : 'QUIET_WAIT';
     var quietSince = Date.now();
     var riseStartMs = 0;
     var peakMag = 0;
-    var lastPeakHaptic = 0;  // SHAKE 峰值回响去抖：200ms 内只震一次
+    var lastPeakHaptic = 0;  // SHAKE 峰值回响去抖：闭包局部，每爻独立窗口
     var settled = false;
     var coinStage = $('coinStage');
 
     function holdHintText() {
-      return _motionEverFired
+      // 基于 capability（_motionSupported）而非 witness（_motionEverFired）：
+      // 已授权 iOS / Android HTTPS 即便用户还没动也显示"轻摇可得一爻"，
+      // 不再把"没收到首个事件"误报为"设备摇不动"。
+      return _motionSupported
         ? '持铜钱 · 轻摇可得一爻'
         : '持铜钱 · 摇手机或点击铜钱';
     }
 
     $('tossHint').textContent = (state === 'HOLD') ? holdHintText() : '请持稳手机';
 
-    // 2s 内仍无 devicemotion 事件就切"点击铜钱"fallback 文案
-    //（覆盖 Android HTTP / 桌面 / iOS 用户拒权）
+    // 2s fallback 兜底：设备不支持 / 拒权才切"点击铜钱"文案。
+    // 支持的设备即使 2s 内未收到事件也不切 —— 避免对"还没动的用户"误报。
     var noMotionHintTimer = setTimeout(function () {
-      if (settled || _motionEverFired) return;
+      if (settled || _motionEverFired || _motionSupported) return;
       if (state !== 'SHAKING') {
         $('tossHint').textContent = '摇不动？点击铜钱区也可定爻';
       }
@@ -584,12 +604,16 @@ function awaitManualToss(getCancelled, isFirst) {
     function finish() {
       if (settled) return;
       settled = true;
+      if (_currentTossCleanup === finish) _currentTossCleanup = null;
       unsub();
       coinStage.removeEventListener('click', onClick);
-      clearInterval(cancelPoll);
       clearTimeout(noMotionHintTimer);
       resolve({ peakMag: peakMag });
     }
+    // 暴露同步 abort 句柄：cancelCurrentDivine / 下一轮 startDivine 入口直接
+    // 调 finish 立即解绑监听，避免"_divineSeq 改了但 listener 还活 150ms"的
+    // stale handler 污染新 run（Codex adversarial review HIGH finding）。
+    _currentTossCleanup = finish;
 
     // 点击 bypass：任何阶段点击铜钱都强制走完 SHAKE 最小视觉再 resolve
     function onClick() {
@@ -636,10 +660,9 @@ function awaitManualToss(getCancelled, isFirst) {
         return;
       }
     });
-
-    var cancelPoll = setInterval(function () {
-      if (getCancelled && getCancelled()) finish();
-    }, 150);
+    // 此处不再 setInterval 轮询 getCancelled：取消走 _currentTossCleanup 同步通道
+    // （Codex adversarial review HIGH finding）。getCancelled 参数保留做签名兼容
+    // 与 awaitShakeSettle 对齐，目前未被内部读取。
   });
 }
 
@@ -702,7 +725,10 @@ async function startDivine() {
   var question = $('question').value.trim();
 
   // 序号守卫：中途切到历史/首页会调 cancelCurrentDivine 递增 _divineSeq，
-  // 任何 await 醒来后 checkpoint() 发现 mySeq 失效即抛 sentinel 静默退出
+  // 任何 await 醒来后 checkpoint() 发现 mySeq 失效即抛 sentinel 静默退出。
+  // 递增前先拆掉上一次 awaitManualToss 的监听（正常路径下 btn.disabled 让这里
+  // 不该有悬挂，但键盘 Enter / 程序化触发等旁路能绕过 disable，双保险）。
+  if (_currentTossCleanup) { try { _currentTossCleanup(); } catch (_) {} }
   var mySeq = ++_divineSeq;
   function checkpoint() {
     if (mySeq !== _divineSeq) throw new Error('__divine_cancelled');
@@ -1173,6 +1199,10 @@ function cancelCurrentInterp() {
  */
 function cancelCurrentDivine() {
   _divineSeq++;
+  // 同步拆掉 awaitManualToss 的 click / subscribeShake 监听。原 150ms poll
+  // 在这段窗口里老监听还活着，用户快速返回再起卦会被老 onClick / _shakeSubs
+  // 污染新 run 的 UI（Codex adversarial review HIGH finding）。
+  if (_currentTossCleanup) { try { _currentTossCleanup(); } catch (_) {} }
   // 真正中断正在跑的 fetch（慢网/冷启动时不再白等浏览器默认超时）
   if (_divineAbort) { try { _divineAbort.abort(); } catch (_) {} _divineAbort = null; }
   cancelCurrentInterp();
@@ -1247,9 +1277,15 @@ function setDivineMode(mode) {
         && typeof DeviceMotionEvent.requestPermission === 'function') {
       _motionPermissionRequested = true;
       DeviceMotionEvent.requestPermission().then(function (res) {
-        if (res === 'granted') armShakeDetector();
-        // 拒绝 / 不支持都静默 fallback 到点击（awaitManualToss 里 onClick 兜底）
-      }).catch(function () { /* no-op */ });
+        if (res === 'granted') {
+          armShakeDetector();
+        } else {
+          // 显式拒权 → 文案立刻切 fallback（不用等 2s 的 NO_MOTION_HINT_MS 兜底）
+          _motionSupported = false;
+        }
+      }).catch(function () {
+        _motionSupported = false;
+      });
     } else {
       armShakeDetector();
     }
