@@ -1861,11 +1861,11 @@ def test_sketching_class_wires_stroke_animations(index_html: str):
 
 def test_start_divine_idx0_uses_calligraphy(app_js: str):
     """startDivine 手摇分支必须按 idx === 0 分叉：首爻 coinsEnterCalligraphy +
-    await sleep(1100) + coinsEnterHold；后续爻沿用 coinsEnterHold({entering:true})。
+    await sleep(1420) + coinsEnterHold；后续爻沿用 coinsEnterHold({entering:true})。
 
-    钉住 1100 而不是更短/更长，是因为三枚 stagger 150ms + 单爻总 800ms（460
-    外圆 + 320 内方起点 + 340 fill-in）= 300 + 800 = 1100，改时长必须同步改
-    JS 和 CSS（测试里也查 CSS 对应 duration 是防 JS/CSS 走样）。"""
+    钉住 1420 是因为三枚 stagger 150ms + 单爻总 1120ms（460 外圆起笔 + 660 四段
+    fill-in with sharp peak + slow melt）= 300 + 1120 = 1420，改时长必须同步改
+    JS 和 CSS（CSS 里 coin-fill-in duration 660ms 对应），测试里两头查防走样。"""
     assert "coinsEnterCalligraphy" in app_js, (
         "缺少 coinsEnterCalligraphy 函数 —— 首爻书法描边未接入"
     )
@@ -1882,7 +1882,7 @@ def test_start_divine_idx0_uses_calligraphy(app_js: str):
     assert re.search(r"idx\s*===?\s*0", body), (
         "startDivine 手摇分支应判断 idx === 0（首爻仪式、后续爻不重复）"
     )
-    # idx === 0 分支体内调 coinsEnterCalligraphy + sleep(1100)
+    # idx === 0 分支体内调 coinsEnterCalligraphy + sleep(1420)
     m2 = re.search(
         r"idx\s*===?\s*0\s*\)\s*\{([^{}]*?(?:\{[^{}]*\}[^{}]*?)*?)\}\s*else",
         body,
@@ -1893,8 +1893,48 @@ def test_start_divine_idx0_uses_calligraphy(app_js: str):
     assert "coinsEnterCalligraphy" in idx0_body, (
         "idx === 0 分支应调 coinsEnterCalligraphy"
     )
-    assert re.search(r"sleep\s*\(\s*1100\s*\)", idx0_body), (
-        "idx === 0 分支应 await sleep(1100) 给描边动画完整时长"
+    assert re.search(r"sleep\s*\(\s*1420\s*\)", idx0_body), (
+        "idx === 0 分支应 await sleep(1420) 给描边 + 四段 fill-in + stagger 完整时长"
+    )
+
+
+def test_coin_fill_in_has_sharp_peak(index_html: str):
+    """coin-fill-in 中间必须存在"硬币锐利清晰"的关键帧窗口。
+
+    用户反馈："硬币应该先清晰画出来再渐隐入光雾"。旧实现 0%→100% 直接从
+    虚到 HOLD 雾态，硬币全程不清晰。新实现必须在 25-55% 之间有 opacity:1 +
+    scale ≥1.0 + blur(0) 的清晰峰值，让用户读到硬币细节。
+
+    本断言钉住这个"可读窗口"不会被无意回退。"""
+    m = re.search(
+        r"@keyframes\s+coin-fill-in\s*\{(.*?)\n\}",
+        index_html,
+        re.S,
+    )
+    assert m, "找不到 @keyframes coin-fill-in"
+    body = m.group(1)
+    # 必须有至少一个介于 25%-55% 的关键帧同时满足：
+    #   opacity: 1  +  scale(1.0) 或 scale(1.XX)  +  blur(0)
+    found_sharp = False
+    for pct in (25, 30, 40, 45, 55):
+        frame_m = re.search(
+            rf"\b{pct}%\s*\{{([^}}]*)\}}",
+            body,
+            re.S,
+        )
+        if not frame_m:
+            continue
+        frame_body = frame_m.group(1)
+        has_full_opacity = re.search(r"opacity:\s*1\b", frame_body) is not None
+        has_full_scale = re.search(r"scale\(1(?:\.\d+)?\)", frame_body) is not None
+        has_no_blur = re.search(r"blur\(0(?:px)?\)", frame_body) is not None
+        if has_full_opacity and has_full_scale and has_no_blur:
+            found_sharp = True
+            break
+    assert found_sharp, (
+        "coin-fill-in 25-55% 区间必须至少有一个关键帧同时满足 "
+        "opacity:1 + scale(1.0+) + blur(0) —— 这是「硬币清晰可读」的视觉锚点，"
+        "少了用户就看不到硬币的「乾亨元利」字、方孔和铸边"
     )
 
 

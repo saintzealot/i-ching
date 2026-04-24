@@ -845,12 +845,14 @@ async function startDivine() {
         setTossPhase('hold');
         renderCoins(shakingFaces, Date.now() + idx, false);
         if (idx === 0) {
-          // 首爻仪式感：书法金线描边 ~1100ms —— 外圆 + 内方从 12 点起笔描出，
-          // 三枚 stagger 150ms，末枚完成即 coin-fill-in 真硬币 340ms 淡入。
-          // 总耗时约 1100ms，期间文案 "金笔生形…" 与书法叙事贴合。
+          // 首爻仪式感：书法金线描边 ~1420ms —— 外圆 + 内方从 12 点起笔描出，
+          // 三枚 stagger 150ms，末枚完成即 coin-fill-in 真硬币 660ms 四段入场
+          // （overshoot 弹入 → 回落立定 → 保持锐利一拍 → 溶入 HOLD 雾境）。
+          // 预算：460 外圆起笔 + 660 fill-in + 300 (三枚 stagger) = 1420ms
+          // 文案 "金笔生形…" 与书法叙事贴合。
           coinsEnterCalligraphy();
           $('tossHint').textContent = '金笔生形…';
-          await sleep(1100);
+          await sleep(1420);
           checkpoint();
           coinsEnterHold();  // 移除 .sketching + 描边叠层，切稳态
         } else {

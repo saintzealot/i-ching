@@ -419,9 +419,12 @@ button { touch-action: manipulation; }
  * 技术：SVG 元素加 pathLength="100" 把描边长度归一化到 100 单位，
  * 配合 stroke-dasharray: 100 + 动画 stroke-dashoffset 100→0 实现"线在生长"。
  * transform: rotate(-90deg) 把 circle 默认起笔点从 3 点改到 12 点（天门）。 */
-.coin-wrap.sketching {
-  position: relative;
-}
+/* 注意：.coin-wrap 基类是 position: absolute（脱离 .coins-row flex 流，用
+ * inline left: Xpx 定位），.sketching 态不能改成 relative——改了会让 wrap
+ * 回到 flex 流被居中排列，inline left 变成"相对 flex 位置的偏移"把三枚
+ * 统统推偏，最右那枚出 260px row 边界甚至出屏（用户录屏反馈的 bug 1）。
+ * .coin-sketch 的 position: absolute 以 .coin-wrap 自身 (absolute 也是
+ * positioned) 为参考框，不需要 relative override。 */
 .coin-wrap.sketching .coin-sketch {
   position: absolute;
   inset: 0;
@@ -449,7 +452,9 @@ button { touch-action: manipulation; }
 }
 .coin-wrap.sketching .coin-spin {
   opacity: 0;
-  animation: coin-fill-in 340ms calc(var(--sketch-delay, 0ms) + 460ms) ease-out forwards;
+  /* linear 总线，per-keyframe 内用 animation-timing-function 给每段独立曲线：
+   * overshoot 弹簧入场 / 回落 standard ease / 锐利期保持 / 溶入 ease-out */
+  animation: coin-fill-in 660ms calc(var(--sketch-delay, 0ms) + 460ms) linear forwards;
   will-change: opacity, transform, filter, translate;
 }
 
@@ -457,15 +462,41 @@ button { touch-action: manipulation; }
   to { stroke-dashoffset: 0; }
 }
 
-/* 真硬币淡入 —— 340ms 后接力到 HOLD 稳态。100% 末帧逐字对齐
- * .coin-wrap.holding .coin-spin 静态值（opacity 0.82 / scale 0.94 /
- * blur(6px) saturate(0.8) / translate -1.5px 0.5px），切 .holding 不跳帧。 */
+/* 真硬币四段入场曲线：
+ *   0-25%   (0-165ms)  overshoot 弹入 —— 从无到 scale 1.04，blur 3→0，像刚铸好在弹
+ *   25-40%  (165-264ms) 回落立定 —— scale 1.04→1.0，锐利
+ *   40-55%  (264-363ms) 保持锐利 ~100ms —— 让用户读到"乾/亨/元/利"字和方孔
+ *   55-100% (363-660ms) 溶入 HOLD 雾境 —— opacity 1→0.82、scale 1.0→0.94、
+ *                                        blur 0→6、sat 1→0.8、translate 0→-1.5px 0.5px
+ * 100% 末帧逐字对齐 .coin-wrap.holding .coin-spin 稳态，切 .holding 无跳帧。 */
 @keyframes coin-fill-in {
   0% {
     opacity: 0;
-    transform: scale(0.90);
-    filter: blur(4px) saturate(0.8);
+    transform: scale(0.86);
+    filter: blur(3px) saturate(0.9);
     translate: 0 0;
+    animation-timing-function: cubic-bezier(0.2, 1.6, 0.4, 1);
+  }
+  25% {
+    opacity: 1;
+    transform: scale(1.04);
+    filter: blur(0) saturate(1);
+    translate: 0 0;
+    animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1.0);
+    filter: blur(0) saturate(1);
+    translate: 0 0;
+    animation-timing-function: linear;
+  }
+  55% {
+    opacity: 1;
+    transform: scale(1.0);
+    filter: blur(0) saturate(1);
+    translate: 0 0;
+    animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1);
   }
   100% {
     opacity: 0.82;
