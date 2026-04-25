@@ -557,10 +557,13 @@ function buildCoinSketch(size) {
   return svgFromString(parts.join(''));
 }
 
-/* 手摇模式首爻（idx === 0）入场仪式 —— 书法金线描边 ~1100ms。
- * 每枚硬币先画外圆 460ms 再补内方 280ms（"天圆地方"）最后本体 340ms 淡入。
+/* 手摇模式首爻（idx === 0）入场仪式 —— 书法金线描边 ~1620ms。
+ * 每枚硬币先画外圆 460ms 再补内方 280ms（"天圆地方"）然后本体 800ms 四段入场
+ * （overshoot 弹入 → 回落锐利 → 保持 ~104ms → 缓溶入 HOLD 雾境 440ms）。
+ * SVG 描边叠层在 fill-in 锐利期末同步开始淡出（sketch-dissolve 480ms @820ms），
+ * 与硬币雾化收尾对齐，不再"线条独自残留"。
  * 三枚按 --sketch-delay CSS 变量 stagger 150ms：第二枚 150ms 后起笔，第三枚
- * 300ms 后起笔，像书法家连写三字。总时长约 300 + 460 + 340 = 1100ms。
+ * 300ms 后起笔，像书法家连写三字。总时长 460 + 800 + 300 + 60 余量 = 1620ms。
  *
  * 真硬币本体由 coin-fill-in keyframes 末帧逐字对齐 HOLD 稳态，无跳帧。 */
 function coinsEnterCalligraphy() {
@@ -845,14 +848,16 @@ async function startDivine() {
         setTossPhase('hold');
         renderCoins(shakingFaces, Date.now() + idx, false);
         if (idx === 0) {
-          // 首爻仪式感：书法金线描边 ~1420ms —— 外圆 + 内方从 12 点起笔描出，
-          // 三枚 stagger 150ms，末枚完成即 coin-fill-in 真硬币 660ms 四段入场
-          // （overshoot 弹入 → 回落立定 → 保持锐利一拍 → 溶入 HOLD 雾境）。
-          // 预算：460 外圆起笔 + 660 fill-in + 300 (三枚 stagger) = 1420ms
+          // 首爻仪式感：书法金线描边 ~1620ms —— 外圆 + 内方从 12 点起笔描出，
+          // 三枚 stagger 150ms，末枚完成即 coin-fill-in 真硬币 800ms 四段入场
+          // （overshoot 弹入 → 回落立定 → 保持锐利一拍 → 缓溶入 HOLD 雾境 440ms）。
+          // SVG 描边叠层与 fill-in 溶入段同步淡出（sketch-dissolve 480ms @820ms），
+          // 不再"线条独自残留"造成"硬币变成线条再隐藏"的视觉错觉（用户反馈）。
+          // 预算：460 描边起 + 800 fill-in + 300 (三枚 stagger) + 60 余量 = 1620ms
           // 文案 "金笔生形…" 与书法叙事贴合。
           coinsEnterCalligraphy();
           $('tossHint').textContent = '金笔生形…';
-          await sleep(1420);
+          await sleep(1620);
           checkpoint();
           coinsEnterHold();  // 移除 .sketching + 描边叠层，切稳态
         } else {
