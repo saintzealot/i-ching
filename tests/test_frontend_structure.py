@@ -1858,45 +1858,86 @@ def test_sketching_class_wires_stroke_animations(index_html: str):
     )
 
 
+def _extract_brace_balanced_block(source: str, header_pattern: str) -> str | None:
+    """提取 `header_pattern { ... }` 体内文本，正确处理嵌套花括号。
+
+    旧实现用非贪婪正则 `(.*?)\\n\\s{0,10}\\}` 抓块体，遇到内嵌 if/else 块会被
+    第一个内层 `}` 截断，捕获不完整。这里用 brace-balance 扫描修正。"""
+    m = re.search(header_pattern, source)
+    if not m:
+        return None
+    start = m.end()
+    depth = 1
+    i = start
+    in_string = None  # None / "'" / '"' / '`'
+    escape = False
+    while i < len(source) and depth > 0:
+        c = source[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == in_string:
+                in_string = None
+        elif c in ("'", '"', "`"):
+            in_string = c
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+        i += 1
+    if depth != 0:
+        return None
+    return source[start : i - 1]
+
+
 def test_start_divine_idx0_uses_calligraphy(app_js: str):
-    """startDivine 手摇分支首爻 idx === 0：coinsEnterCalligraphy + sleep(1620)
-    + coinsEnterHold。Option A 持久 DOM 重构后 idx ≥ 1 不再有显式 enter 动画
-    （从上爻 tail 的 .holding 自然延续），所以这里只断 idx === 0 分支存在 +
-    包含必需调用，不再要求 else 分支。
+    """startDivine 首爻 idx === 0 共用入场仪式：coinsEnterCalligraphy + sleep(1620)
+    + coinsEnterHold。共用版本下 idx === 0 序章对手摇/自动两模式同时生效（Option A
+    持久 DOM 重构 + 自动模式仪式扩散）；idx ≥ 1 沿用上爻 tail（手摇 .holding
+    延续 / 自动 .just-landed → .shaking），所以这里只断 idx === 0 分支存在 +
+    包含必需调用 + 含 reduced-motion 压缩分支 sleep(320)，不再要求 else 分支。
 
     钉住 1620 是因为三枚 stagger 150ms + 单爻总 1260ms（460 描边起 + 800 四段
-    fill-in with sharp peak + 440ms 缓溶尾）+ 60 余量 = 300 + 1260 + 60 = 1620。"""
+    fill-in with sharp peak + 440ms 缓溶尾）+ 60 余量 = 300 + 1260 + 60 = 1620。
+    钉住 320 是 reduced-motion 用户的 fallback：CSS 已把 sketching 动画压到接近
+    0ms 直接落 HOLD 稳态，固定 1620ms 等待变成纯空等；320ms 保留"金笔生形"大字
+    一拍展示让文字叙事可读，比直接 0ms 体感更稳。"""
     assert "coinsEnterCalligraphy" in app_js, (
         "缺少 coinsEnterCalligraphy 函数 —— 首爻书法描边未接入"
     )
     assert "buildCoinSketch" in app_js, (
         "缺少 buildCoinSketch —— 描边 SVG 构造函数未定义"
     )
-    m = re.search(
-        r"async\s+function\s+startDivine\s*\([^)]*\)\s*\{(.*?)\n\}",
-        app_js,
-        re.S,
+    body = _extract_brace_balanced_block(
+        app_js, r"async\s+function\s+startDivine\s*\([^)]*\)\s*\{"
     )
-    assert m, "找不到 startDivine 函数体"
-    body = m.group(1)
+    assert body is not None, "找不到 startDivine 函数体"
     assert re.search(r"idx\s*===?\s*0", body), (
-        "startDivine 手摇分支应判断 idx === 0（首爻仪式、后续爻不重复）"
+        "startDivine 应判断 idx === 0（首爻仪式、后续爻不重复）"
     )
     # idx === 0 分支体内必含 coinsEnterCalligraphy + sleep(1620) + coinsEnterHold
-    # 用一个宽松的窗口抓 if (idx === 0) { ... } 块（不再要求 else）
-    m2 = re.search(
-        r"if\s*\(\s*idx\s*===?\s*0\s*\)\s*\{(.*?)\n\s{0,10}\}",
-        body,
-        re.S,
+    # 用 brace-balance 扫描而非非贪婪正则，确保内嵌 if/else（reduced-motion 分支）
+    # 不会让捕获被第一个内层 } 截断
+    idx0_body = _extract_brace_balanced_block(
+        body, r"if\s*\(\s*idx\s*===?\s*0\s*\)\s*\{"
     )
-    assert m2, "找不到 startDivine 的 if (idx === 0) { ... } 分支体"
-    idx0_body = m2.group(1)
+    assert idx0_body is not None, "找不到 startDivine 的 if (idx === 0) { ... } 分支体"
     assert "coinsEnterCalligraphy" in idx0_body, (
         "idx === 0 分支应调 coinsEnterCalligraphy"
     )
     assert re.search(r"sleep\s*\(\s*1620\s*\)", idx0_body), (
         "idx === 0 分支应 await sleep(1620) 给描边 + 四段 fill-in (800ms) + "
         "stagger (300ms) + 余量 完整时长"
+    )
+    assert re.search(r"sleep\s*\(\s*320\s*\)", idx0_body), (
+        "idx === 0 分支应 await sleep(320) 作为 prefers-reduced-motion 用户的"
+        "压缩 fallback（CSS 已让动画接近瞬时落 HOLD 稳态，固定 1620ms 变空等）"
+    )
+    assert re.search(r"prefers-reduced-motion[^\n]*reduce", idx0_body), (
+        "idx === 0 分支应用 matchMedia('(prefers-reduced-motion: reduce)') 检测"
+        "用户偏好，不应只硬编码两个 sleep 而无判断"
     )
     assert "coinsEnterHold" in idx0_body, (
         "idx === 0 分支末尾应调 coinsEnterHold 切 .holding 稳态 + 移除描边叠层"

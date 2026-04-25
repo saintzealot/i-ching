@@ -875,12 +875,15 @@ async function startDivine() {
     for (var i = 0; i < 6; i++) barsBox.appendChild(el('span'));
 
     // 一次性创建 3 枚 .coin-wrap —— 整个起卦过程它们持续存在，不再每爻重建。
-    // 初始 face 给随机值，LAND 阶段会用真实 lineVal 在原 .coin-spin 上 in-place
-    // 替换 SVG。位置 seededLayout 一次定位后不变。
+    // 初始 face 用首爻真实币面预热（Core.coinsForLine(lines[0])），首爻描边期
+    // coin-fill-in 锐利窗口（~100ms 可读「乾亨元利」字）显示的币面集合与 LAND
+    // 阶段（line ~952 Core.coinsForLine(lineVal)）一致，消除"占位 → 真值"切换
+    // 的隐含错觉（Codex 第 N 轮 adversarial review 采纳）。位置仍由 LAND 阶段
+    // 独立洗牌，保持"位置不固定"的视觉自然感。
     // 这个改动是 "Option A 持久 DOM" 重构的核心 —— 旧版本每爻调 renderCoins
     // 全量重建 DOM，加上 startRegather 35% 收拢，造成用户体感的"突兀缩一下 +
     // 瞬间散开 + 闪烁"。持久 DOM 把这三个症状一次性消除（语义级改动）。
-    var _initFaces = [Math.random() > 0.5, Math.random() > 0.5, Math.random() > 0.5];
+    var _initFaces = Core.coinsForLine(lines[0]);
     initCoins(Date.now(), _initFaces);
 
     var tossNames = ['壹','贰','叁','肆','伍','陆'];
@@ -899,44 +902,69 @@ async function startDivine() {
         bars[j].className = j < idx ? 'done' : (j === idx ? 'active' : '');
       }
 
-      // 手摇 vs 自动：初始视觉态不同
-      //   手摇 idx === 0：从无 class → .sketching → .holding（书法描边仪式）
-      //   手摇 idx >= 1：从上爻 tail 的 .holding 直接延续（无需 enter 动画）
-      //   自动 任意 idx：切到 .shaking（持续翻转 600ms 后落定）
+      // 首爻共用入场仪式 —— 书法金线描边 ~1620ms（双模式）
+      //   外圆 + 内方从 12 点起笔描出，三枚 stagger 150ms，末枚完成即
+      //   coin-fill-in 真硬币 800ms 四段入场（overshoot 弹入 → 回落立定 → 保持锐利
+      //   一拍 → 缓溶入 HOLD 雾境 440ms）。SVG 描边叠层与 fill-in 溶入段同步淡出
+      //   （sketch-dissolve 480ms @820ms），不再"线条独自残留"造成"硬币变成线条
+      //   再隐藏"的视觉错觉。预算：460 + 800 + 300 stagger + 60 余量 = 1620ms。
+      //
+      //   文案 "金笔生形" 升格为大字 narrative title（章节名层级），hint 小字留空，
+      //   避免和大字争注意力。dash 进度条相位走 'hold'（凝神段），与手摇一致。
+      //
+      //   coin-fill-in 100% 末帧对齐 HOLD 稳态，所以描边后无论接手摇还是自动 shake
+      //   都共用 coinsEnterHold() 做 cleanup（清 .sketching + .coin-sketch 叠层 +
+      //   --sketch-delay）+ 大字复位 '凝神静候'。下方模式分流再切 .holding / .shaking。
+      //   自动模式从此处的 .holding 稳态切 .shaking 是手摇 idx >= 1 已成熟的"用户摇"
+      //   路径（.holding → .shaking），首爻视觉衔接零跳帧。
+      if (idx === 0) {
+        setTossPhase('hold');
+        coinsEnterCalligraphy();
+        $('tossInstr').textContent = '金笔生形';
+        setInstrCalligraphy(true);
+        $('tossHint').textContent = '';
+        // reduced-motion 用户：CSS 已把 sketching 动画压到接近 0ms 直接落到 HOLD
+        // 稳态（.coin-wrap.sketching 的 prefers-reduced-motion fallback），
+        // 用户看不到描边/fill-in，固定 1620ms 等待变成纯空等。压缩到 320ms 保留
+        // "金笔生形" 大字一拍展示让文字叙事可读，比直接 0ms 体感更稳，避免
+        // "按下起卦立刻翻硬币"的仓促感（Codex 第 N 轮 adversarial 采纳）。
+        // 留 1620 字面量在源码里，结构性测试钉的是"序章长度上限"不变。
+        var _reducedMotion = window.matchMedia
+          && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (_reducedMotion) {
+          await sleep(320);
+        } else {
+          await sleep(1620);
+        }
+        checkpoint();
+        coinsEnterHold();  // 清 .sketching + 描边叠层 + --sketch-delay → .holding 稳态
+        $('tossInstr').textContent = '凝神静候';
+        setInstrCalligraphy(false);
+      }
+
+      // 模式分流：
+      //   手摇：setTossPhase('hold')；idx === 0 后已 .holding（等用户摇）；
+      //         idx >= 1 沿用上爻 tail 的 .holding（CSS transition 600ms 在屏息段
+      //         前 60% 已完成）。hint 留给 awaitManualToss 状态机接管，避免预设
+      //         乐观文案在 QUIET_WAIT 期被立刻打脸催"请持稳手机"。
+      //   自动 idx === 0：先插入 ~280ms .holding 稳态一拍真实 await，让浏览器
+      //         commit .holding 视觉态（"凝神静候"大字 + 慢呼吸雾化），节奏与
+      //         手摇的"金笔生形 → 凝神 → 摇 → 翻转"对称。手摇路径里这一拍由
+      //         用户摇/点击的物理响应延迟（~100-2000ms）天然提供；自动路径没有
+      //         用户输入缓冲，sketching → shaking 两次 classList 同步切让 .holding
+      //         帧被浏览器合并丢弃，节奏从"金笔生形 → 凝神 → 翻转"塌成"金笔生形
+      //         → 翻转"（用户真机反馈 + Playwright MutationObserver 证据）。
+      //         reduced-motion 用户跳过：CSS 已把 .holding 视觉效果压平，空等无义。
+      //   自动 idx >= 1：起点是 .just-landed（coin-toss 末帧），不存在 .holding
+      //         丢失问题，无需这段。
       if (divineMode === 'manual') {
         setTossPhase('hold');
-        if (idx === 0) {
-          // 首爻仪式感：书法金线描边 ~1620ms —— 外圆 + 内方从 12 点起笔描出，
-          // 三枚 stagger 150ms，末枚完成即 coin-fill-in 真硬币 800ms 四段入场
-          // （overshoot 弹入 → 回落立定 → 保持锐利一拍 → 缓溶入 HOLD 雾境 440ms）。
-          // SVG 描边叠层与 fill-in 溶入段同步淡出（sketch-dissolve 480ms @820ms），
-          // 不再"线条独自残留"造成"硬币变成线条再隐藏"的视觉错觉（用户反馈）。
-          // 预算：460 描边起 + 800 fill-in + 300 (三枚 stagger) + 60 余量 = 1620ms
-          // 文案 "金笔生形…" 与书法叙事贴合。
-          coinsEnterCalligraphy();
-          // "金笔生形" 升格为大字 narrative title（章节名层级）；hint 小字
-          // 留空，避免和大字争夺注意力。语义：大字 = 当前仪式章节，
-          // 小字 = 状态/动作提示（不在描边期承担信息）。
-          $('tossInstr').textContent = '金笔生形';
-          setInstrCalligraphy(true);
-          $('tossHint').textContent = '';
-          await sleep(1620);
-          checkpoint();
-          coinsEnterHold();  // 移除 .sketching + 描边叠层，切 .holding 稳态
-          // 描边结束 → 恢复"凝神静候"大字（等待用户摇），关闭 narrative 态
-          $('tossInstr').textContent = '凝神静候';
-          setInstrCalligraphy(false);
-        }
-        // idx >= 1：上一爻 tail 已调过 coinsEnterHold()，coin 已在 .holding 态
-        //          且 transition 600ms 平滑过渡（filter blur 0→6px / opacity 1→0.82）
-        //          已经在屏息段前 60% 完成。这里不再调任何 enter 动画。
-        // hint 不在此处预设 —— 留给 awaitManualToss 根据真实状态接管，避免
-        // "hint 说可摇但状态机还在 QUIET_WAIT" 的错位（用户报"卡在请持稳手机"
-        // 的根因：预设乐观文案 → 状态机一接管立刻打脸催"请持稳"）。
-        // 上一段 tail 设的 "凝神片刻 · 下一爻蓄势" 自然延续到状态机给出新信号。
       } else {
+        if (idx === 0 && !_reducedMotion) {
+          await sleep(280);
+          checkpoint();
+        }
         setTossPhase('shake');
-        // 自动模式：从无 class（idx 0）或 .just-landed（idx >= 1）切到 .shaking
         coinsEnterShake();
         $('tossHint').textContent = '铜钱自行翻转中…';
       }
