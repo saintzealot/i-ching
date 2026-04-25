@@ -447,7 +447,10 @@ function subscribeShake(fn) {
  *   hold/null → 纯 .active（呼吸脉冲）
  *   shake     → .active.active-shake（实心亮金，脉冲停）
  *   land      → .active.active-land（一次 ping 闪烁）
- * 用户扫顶部一眼就知道当前爻在哪个阶段，不用读文字。 */
+ * 用户扫顶部一眼就知道当前爻在哪个阶段，不用读文字。
+ *
+ * "可以摇" 的 ready 信号不在 dash 上 —— 用户实测反馈 dash 在视觉边缘看不清。
+ * 改用 #tossInstr 大字"凝神静候" 的流光态承担（见 setInstrShakeReady）。 */
 function setTossPhase(phase) {
   var sp = $('shakeProgress');
   if (!sp) return;
@@ -463,76 +466,76 @@ function setTossPhase(phase) {
   else if (phase === 'land') active.classList.add('active-land');
 }
 
-/* 归位动作：LAND 态（各枚硬币在 seededLayout 给出的随机位置）→ HOLD 态。
- * 每枚硬币向 coinsRow 中心方向收拢 35%，同步 halo 升起 + blur 加深，
- * 500ms 内完成。用户反馈核心："应该要先归位，同步光晕升起让硬币变得模糊"。
+/* "凝神静候" 大字流光态：on = "现在可以摇" 视觉信号（金色文字 + 横扫流光）；
+ * off = 普通灰白色文字。HOLD 状态进入时 on，SHAKING 进入时 off，LAND 时 off
+ * （文本切到爻类型如"老阴"也不带流光）。
  *
- * 实现要点：
- *   - 不重建 DOM，直接在当前 .just-landed 的 wrap 上做 class 切换
- *   - 每枚 wrap 各自算 (dx, dy) 相对 coinsRow 中心的"收拢向量"，
- *     写入 CSS 变量 --home-dx / --home-dy
- *   - CSS 的 .coin-wrap.holding.regathering 通过 translate: var(--home-dx, 0)...
- *     + transition: translate 500ms 把"归位移动"表达成 compositor-friendly 的
- *     translate 过渡（GPU 路径，不触发 layout reflow）
- *   - .holding 同时被加上：halo-hold-fade-in 500ms 自动跑，coin-spin 的
- *     filter blur/opacity 通过 transition 同步过渡 */
-function startRegather() {
-  var wraps = $('coinsRow').querySelectorAll('.coin-wrap.just-landed');
-  if (!wraps.length) return;
-  var row = $('coinsRow');
-  var rowRect = row.getBoundingClientRect();
-  var cx = rowRect.width / 2;
-  var cy = rowRect.height / 2;
-  for (var i = 0; i < wraps.length; i++) {
-    var w = wraps[i];
-    var wRect = w.getBoundingClientRect();
-    var wx = wRect.left + wRect.width / 2 - rowRect.left;
-    var wy = wRect.top + wRect.height / 2 - rowRect.top;
-    // 收拢 35% —— 三枚向中心靠但仍能分辨是三枚（太近视觉重叠，太远感觉不到"归位"）
-    var dx = (cx - wx) * 0.35;
-    var dy = (cy - wy) * 0.35;
-    w.style.setProperty('--home-dx', dx + 'px');
-    w.style.setProperty('--home-dy', dy + 'px');
-    w.classList.remove('just-landed');
-    w.classList.add('holding', 'regathering');
-  }
+ * 设计：流光是"动作允许"的视觉语言。大字本就在视觉中心，用户摇手机时不
+ * 用扫到 dash 也能看到。流光是 sweep 而不是 pulse —— 不灯泡式。 */
+function setInstrShakeReady(ready) {
+  var instr = $('tossInstr');
+  if (!instr) return;
+  if (ready) instr.classList.add('shake-ready');
+  else instr.classList.remove('shake-ready');
 }
 
-/* 把当前 .coin-wrap 从"握"态切到"摇"态（或反向）。
- * 不重建 DOM，只换 class —— 避免 SVG 重新构建导致的一帧闪烁。 */
+/* "金笔生形" 大字 narrative title 态：on = idx===0 书法描边期间，承担"系统
+ * 在画笔仪式中"的章节名角色。solid gold-hi 不流光（流光是 "you can act"，
+ * 这里是 "system is acting"，语义不同），区别于 off / shake-ready 两态。
+ *
+ * 用户反馈："金笔生形不应该是小字，而应该是凝神静候前的文字"——
+ * 重新分配视觉层级：大字承担 narrative title（章节名），小字承担状态/动作提示。 */
+function setInstrCalligraphy(active) {
+  var instr = $('tossInstr');
+  if (!instr) return;
+  if (active) instr.classList.add('calligraphy-active');
+  else instr.classList.remove('calligraphy-active');
+}
+
+/* 同步重置大字 / 小字到中性态 —— startDivine 入口 + cancelCurrentDivine +
+ * catch 自复位路径都要调，避免 shake UI 在 fetch 等待期或重启 race 期间
+ * 显示上一轮的 sticky shimmer / calligraphy 态（false affordance：用户看到
+ * "可摇"但 awaitManualToss 还没起来，输入被静默丢弃）。
+ *
+ * Codex 第十一轮 adversarial review F1 采纳。 */
+function resetTossInstr() {
+  var instr = $('tossInstr');
+  if (instr) {
+    instr.textContent = '凝神静候';
+    instr.classList.remove('shake-ready', 'calligraphy-active');
+  }
+  var hint = $('tossHint');
+  if (hint) hint.textContent = '';
+}
+
+/* 把当前 .coin-wrap 从任意态（HOLD / LAND）切到"摇"态。
+ * 不重建 DOM，只换 class —— 避免 SVG 重建的一帧闪烁。
+ * 同时清掉 .just-landed（auto 模式从 LAND 直接进下一爻 SHAKE，要确保 class
+ * 不残留）。 */
 function coinsEnterShake() {
   var wraps = $('coinsRow').querySelectorAll('.coin-wrap');
   for (var i = 0; i < wraps.length; i++) {
-    wraps[i].classList.remove('holding');
+    wraps[i].classList.remove('holding', 'just-landed');
     wraps[i].classList.add('shaking');
   }
 }
-/* coinsEnterHold(opts)
- *   opts.entering=true → 同时加 .entering 瞬态类，CSS 里 @keyframes holding-enter
- *     跑一次 500ms 把铜钱从"无"（opacity 0 / scale 0.82 / blur 10px）渐显到
- *     HOLD 稳态（0.82 / 0.94 / 6px）。520ms 后清除 .entering 让稳态 animation
- *     (coin-breathe + coin-hold-drift) 接手。用于后续爻（idx > 0）入场。
- *   不传参数 → 只做 shaking/just-landed/sketching → holding 的 class 切换
- *     （coinsEnterCalligraphy 跑完 ~1000ms 后调此函数切 .holding 进稳态；
- *      同时移除首爻的 .coin-sketch 描边叠层 DOM）。 */
-function coinsEnterHold(opts) {
-  var entering = !!(opts && opts.entering);
+
+/* 切换到 HOLD 态：从 .shaking / .just-landed / .sketching 任一源态切到 .holding。
+ * 不重建 DOM，只换 class。同时清掉首爻 .sketching 阶段注入的描边叠层 DOM。
+ *
+ * 关键设计：CSS 里 `.coin-wrap.holding .coin-spin` 规则带 transition: filter/opacity
+ * 600ms ease-out。.just-landed → .holding 的 class 切换时，blur 0→6px / opacity
+ * 1→0.82 自动平滑过渡（替代旧的 startRegather 收拢动画 + .holding.entering 入场
+ * 动画双重路径，统一为一条 CSS transition 接力）。 */
+function coinsEnterHold() {
   var wraps = $('coinsRow').querySelectorAll('.coin-wrap');
   for (var i = 0; i < wraps.length; i++) {
     var w = wraps[i];
     w.classList.remove('shaking', 'just-landed', 'sketching');
     w.classList.add('holding');
-    if (entering) w.classList.add('entering');
-    // 清掉 sketching 阶段注入的描边叠层 + stagger 变量
     var sketch = w.querySelector('.coin-sketch');
     if (sketch) sketch.parentNode.removeChild(sketch);
     w.style.removeProperty('--sketch-delay');
-  }
-  if (entering) {
-    setTimeout(function () {
-      var ws = $('coinsRow').querySelectorAll('.coin-wrap.entering');
-      for (var j = 0; j < ws.length; j++) ws[j].classList.remove('entering');
-    }, 520);
   }
 }
 
@@ -622,6 +625,11 @@ function awaitManualToss(getCancelled, isFirst) {
     var riseStartMs = 0;
     var peakMag = 0;
     var lastPeakHaptic = 0;  // SHAKE 峰值回响去抖：闭包局部，每爻独立窗口
+    // 持续运动起点（mag >= SHAKE_LO 第一帧时间戳）。仅当持续运动超过
+    // STEADY_HINT_DELAY 才提示"请持稳手机"——避免把"刚从落定姿势收手"的
+    // 自然手部余动催作"乱动"，那是用户报"卡在请持稳手机"的根因。
+    var motionStartedAt = 0;
+    var STEADY_HINT_DELAY = 280;  // ms - 持续运动多久后才提示用户持稳
     var settled = false;
     var coinStage = $('coinStage');
 
@@ -634,7 +642,15 @@ function awaitManualToss(getCancelled, isFirst) {
         : '持铜钱 · 摇手机或点击铜钱';
     }
 
-    $('tossHint').textContent = (state === 'HOLD') ? holdHintText() : '请持稳手机';
+    // 初始 hint 只在 HOLD（idx === 0 首爻）设乐观文案；QUIET_WAIT 不主动催
+    // "请持稳手机"——保留上一段 tail 的"凝神片刻 · 下一爻蓄势"延续到状态机
+    // 检测到真实运动模式才给信号（要么进 HOLD 给可摇文案，要么持续运动才催持稳）。
+    if (state === 'HOLD') {
+      $('tossHint').textContent = holdHintText();
+      // "凝神静候" 大字开启流光态 —— "现在可以摇" 的视觉信号
+      // （iOS Safari 不支持 navigator.vibrate，所以视觉是主信号）。
+      setInstrShakeReady(true);
+    }
 
     // 2s fallback 兜底：设备不支持 / 拒权才切"点击铜钱"文案。
     // 支持的设备即使 2s 内未收到事件也不切 —— 避免对"还没动的用户"误报。
@@ -652,6 +668,8 @@ function awaitManualToss(getCancelled, isFirst) {
       peakMag = initialMag || 0;
       setTossPhase('shake');
       coinsEnterShake();
+      // "凝神静候" 流光关闭 —— 用户已经在摇了，go 信号使命完成。
+      setInstrShakeReady(false);
       $('tossHint').textContent = '凝神摇卦…';
       haptic(30);
     }
@@ -686,13 +704,25 @@ function awaitManualToss(getCancelled, isFirst) {
 
       if (state === 'QUIET_WAIT') {
         if (mag < SHAKE_LO) {
+          motionStartedAt = 0;  // 静下来了，重置持续运动计时
           if (now - quietSince >= QUIET_MS) {
             state = 'HOLD';
             $('tossHint').textContent = holdHintText();
+            // "凝神静候" 大字开启流光 —— "现在可以摇"的主视觉 go 信号
+            // （iOS Safari 不支持 navigator.vibrate，所以视觉是主信号通道）。
+            setInstrShakeReady(true);
+            // haptic(12) 兜底：Android 支持的设备给一下短震，
+            // 三层触感分级（READY 12 / SHAKING 峰值 8 / LAND 18）独立辨识。
+            haptic(12);
           }
         } else {
           quietSince = now;
-          $('tossHint').textContent = '请持稳手机';
+          if (motionStartedAt === 0) motionStartedAt = now;
+          // 持续运动超过 STEADY_HINT_DELAY 才催"请持稳手机"——前 280ms 的
+          // 自然手部余动不打扰用户，让 hint 留在"凝神片刻 · 下一爻蓄势"。
+          if (now - motionStartedAt >= STEADY_HINT_DELAY) {
+            $('tossHint').textContent = '请持稳手机';
+          }
         }
         return;
       }
@@ -741,12 +771,24 @@ function appendYaoToHexPreview(lineVal) {
   requestAnimationFrame(function () { row.classList.add('shown'); });
 }
 
-function renderCoins(faces, seedNum, shaking) {
+/* 一次性创建 3 枚 .coin-wrap (含 .coin-spin SVG)，整个起卦过程 6 爻全程
+ * 这 3 枚 DOM 节点持续存在，不再每爻重建（旧版本 renderCoins 每爻 clearChildren
+ * 全量重建会导致用户感受到的"瞬间散开 + 闪烁"——DOM 销毁/重建那一帧的副产物，
+ * 加上 startRegather 35% 收拢的"突兀缩一下"，整段过渡体感很差）。
+ *
+ * Option A 重构：startDivine 循环外只调一次 initCoins；每爻 LAND 阶段在
+ * 现有 .coin-spin 上做 in-place SVG 替换（per-coin 错峰 setTimeout）；
+ * LAND→HOLD 的过渡靠 .coin-wrap.holding .coin-spin 上的 transition 自动接力。
+ *
+ * 位置由 seededLayout(seedNum) 计算一次后不变 —— 真实铜钱卜每次也是落在
+ * 相近位置，不是视觉单调，是视觉可识别。dash 进度 + 字花文案已经标记"第 N 爻"，
+ * 不靠位置变化做区分。 */
+function initCoins(seedNum, faces) {
   var row = $('coinsRow');
   clearChildren(row);
   var layout = Core.seededLayout(seedNum);
   for (var i = 0; i < 3; i++) {
-    var wrap = el('div', { className: 'coin-wrap' + (shaking ? ' shaking' : '') });
+    var wrap = el('div', { className: 'coin-wrap' });
     wrap.style.left = layout[i].x + 'px';
     wrap.style.top = layout[i].y + 'px';
     // 外层 .coin-wrap 的 transform 只承担静态 rotate（摆位）+ 被 coin-shake 动画覆盖时
@@ -792,6 +834,10 @@ async function startDivine() {
   resetResultCards();
   resetHexPreview();
   $('coinResult').textContent = '';
+  // 同步清掉 tossInstr 的 sticky 类 + 小字 —— 必须在 is-shaking 开启之前，
+  // 否则 fetch 等待期（200ms-2s）shake UI 已可见但残留上轮 shimmer/calligraphy
+  // 流光态，用户被 false affordance 引导（Codex 第十一轮 F1）。
+  resetTossInstr();
   app.classList.remove('has-result');
   app.classList.add('is-shaking');
   app.setAttribute('data-mode', divineMode);
@@ -828,11 +874,24 @@ async function startDivine() {
     clearChildren(barsBox);
     for (var i = 0; i < 6; i++) barsBox.appendChild(el('span'));
 
+    // 一次性创建 3 枚 .coin-wrap —— 整个起卦过程它们持续存在，不再每爻重建。
+    // 初始 face 给随机值，LAND 阶段会用真实 lineVal 在原 .coin-spin 上 in-place
+    // 替换 SVG。位置 seededLayout 一次定位后不变。
+    // 这个改动是 "Option A 持久 DOM" 重构的核心 —— 旧版本每爻调 renderCoins
+    // 全量重建 DOM，加上 startRegather 35% 收拢，造成用户体感的"突兀缩一下 +
+    // 瞬间散开 + 闪烁"。持久 DOM 把这三个症状一次性消除（语义级改动）。
+    var _initFaces = [Math.random() > 0.5, Math.random() > 0.5, Math.random() > 0.5];
+    initCoins(Date.now(), _initFaces);
+
     var tossNames = ['壹','贰','叁','肆','伍','陆'];
     for (var idx = 0; idx < 6; idx++) {
       $('tossLabel').textContent = '第 ' + tossNames[idx] + ' 爻';
       $('tossCount').textContent = (idx + 1) + ' / 6';
       $('tossInstr').textContent = '凝神静候';
+      // 防御性清两类大字状态：上一爻 LAND 时 enterShaking 已清 shake-ready，
+      // calligraphy-active 仅在 idx===0 内部生命周期使用，这里双保险防泄漏。
+      setInstrShakeReady(false);
+      setInstrCalligraphy(false);
       $('coinResult').textContent = '';
 
       var bars = barsBox.children;
@@ -841,12 +900,11 @@ async function startDivine() {
       }
 
       // 手摇 vs 自动：初始视觉态不同
-      //   手摇 = HOLD 态（铜钱聚拢静置，等用户摇）
-      //   自动 = 直接进 SHAKE 态（铜钱持续随机翻转 600ms 后落定）
-      var shakingFaces = [Math.random() > 0.5, Math.random() > 0.5, Math.random() > 0.5];
+      //   手摇 idx === 0：从无 class → .sketching → .holding（书法描边仪式）
+      //   手摇 idx >= 1：从上爻 tail 的 .holding 直接延续（无需 enter 动画）
+      //   自动 任意 idx：切到 .shaking（持续翻转 600ms 后落定）
       if (divineMode === 'manual') {
         setTossPhase('hold');
-        renderCoins(shakingFaces, Date.now() + idx, false);
         if (idx === 0) {
           // 首爻仪式感：书法金线描边 ~1620ms —— 外圆 + 内方从 12 点起笔描出，
           // 三枚 stagger 150ms，末枚完成即 coin-fill-in 真硬币 800ms 四段入场
@@ -856,21 +914,30 @@ async function startDivine() {
           // 预算：460 描边起 + 800 fill-in + 300 (三枚 stagger) + 60 余量 = 1620ms
           // 文案 "金笔生形…" 与书法叙事贴合。
           coinsEnterCalligraphy();
-          $('tossHint').textContent = '金笔生形…';
+          // "金笔生形" 升格为大字 narrative title（章节名层级）；hint 小字
+          // 留空，避免和大字争夺注意力。语义：大字 = 当前仪式章节，
+          // 小字 = 状态/动作提示（不在描边期承担信息）。
+          $('tossInstr').textContent = '金笔生形';
+          setInstrCalligraphy(true);
+          $('tossHint').textContent = '';
           await sleep(1620);
           checkpoint();
-          coinsEnterHold();  // 移除 .sketching + 描边叠层，切稳态
-        } else {
-          // 后续爻沿用 500ms holding-enter 渐显（书法仪式感只首爻一次，后续
-          // 爻继续进出循环不重跑，避免节奏被拖慢）。
-          coinsEnterHold({ entering: true });
+          coinsEnterHold();  // 移除 .sketching + 描边叠层，切 .holding 稳态
+          // 描边结束 → 恢复"凝神静候"大字（等待用户摇），关闭 narrative 态
+          $('tossInstr').textContent = '凝神静候';
+          setInstrCalligraphy(false);
         }
-        $('tossHint').textContent = _motionSupported
-          ? '持铜钱 · 轻摇可得一爻'
-          : '持铜钱 · 摇手机或点击铜钱';
+        // idx >= 1：上一爻 tail 已调过 coinsEnterHold()，coin 已在 .holding 态
+        //          且 transition 600ms 平滑过渡（filter blur 0→6px / opacity 1→0.82）
+        //          已经在屏息段前 60% 完成。这里不再调任何 enter 动画。
+        // hint 不在此处预设 —— 留给 awaitManualToss 根据真实状态接管，避免
+        // "hint 说可摇但状态机还在 QUIET_WAIT" 的错位（用户报"卡在请持稳手机"
+        // 的根因：预设乐观文案 → 状态机一接管立刻打脸催"请持稳"）。
+        // 上一段 tail 设的 "凝神片刻 · 下一爻蓄势" 自然延续到状态机给出新信号。
       } else {
         setTossPhase('shake');
-        renderCoins(shakingFaces, Date.now() + idx, true);
+        // 自动模式：从无 class（idx 0）或 .just-landed（idx >= 1）切到 .shaking
+        coinsEnterShake();
         $('tossHint').textContent = '铜钱自行翻转中…';
       }
 
@@ -950,9 +1017,11 @@ async function startDivine() {
       if (divineMode === 'manual' && idx < 5) {
         await sleep(450);
         checkpoint();
-        // 启动"归位"动作 —— 3 枚落定硬币向中心收拢，同步 halo 升起 + blur 加深。
+        // 切到 HOLD 态 —— class 从 .just-landed → .holding，CSS transition 自动
+        // 平滑过渡 filter blur 0→6px / opacity 1→0.82（600ms ease-out）。
+        // 不再有"归位 35% 收拢"的突兀位移；硬币留在落定原位 → blur+halo 升起。
         // 450ms 已经让用户充分读到"阳爻"，现在进入过渡态。
-        startRegather();
+        coinsEnterHold();
         $('tossHint').textContent = '凝神片刻 · 下一爻蓄势';
         await sleep(550);
         checkpoint();
@@ -996,6 +1065,7 @@ async function startDivine() {
       app.removeAttribute('data-mode');
       $('baguaStage').classList.remove('mode-shake');
       setTossPhase(null);
+      resetTossInstr();
       showError('算卦请求超时（10 秒）。请检查网络或稍后重试。');
       return;
     }
@@ -1003,6 +1073,7 @@ async function startDivine() {
     app.removeAttribute('data-mode');
     $('baguaStage').classList.remove('mode-shake');
     setTossPhase(null);
+    resetTossInstr();
     showError('算卦失败：' + e.message + '。请检查后端服务是否启动。');
   } finally {
     // 清理 timeout 防泄漏（正常路径已 clearTimeout，这里是异常路径保险）
@@ -1284,6 +1355,7 @@ function cancelCurrentDivine() {
   $('coinStage').setAttribute('aria-hidden', 'true');
   $('shakeProgress').setAttribute('aria-hidden', 'true');
   setTossPhase(null);
+  resetTossInstr();
   $('btnDivine').disabled = false;
   document.querySelectorAll('.df-mode').forEach(function (b) { b.disabled = false; });
 }

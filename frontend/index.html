@@ -278,14 +278,9 @@ button { touch-action: manipulation; }
 .coin-wrap {
   position: absolute;
   z-index: 1;
-  /* translate 属性必须单列 transition —— CSS Transforms Level 2 把 translate
-   * 与 transform 解耦，不会被 `transform 0.5s` 覆盖。不加这条，.regathering
-   * 类被 coinsEnterShake() 删除瞬间 translate 会从 var(--home-dx,dy) 突变回 0，
-   * 眼睛读作"啪地散开"。 */
   transition: left 0.5s cubic-bezier(.4,.2,.3,1),
               top 0.5s cubic-bezier(.4,.2,.3,1),
               transform 0.5s cubic-bezier(.4,.2,.3,1),
-              translate 0.5s cubic-bezier(.4,.2,.3,1),
               opacity 0.3s;
 }
 /* 内层 .coin-spin 承担视觉状态（blur / scale / opacity）；不做任何旋转
@@ -351,14 +346,23 @@ button { touch-action: manipulation; }
  * 稳态动画（持续跑）：
  *   coin-breathe     2.4s infinite alternate：慢呼吸 scale 缩放，像"手心微起伏"
  *   coin-hold-drift  3.6s infinite alternate：±1.5px 微晃 translate，像"在掌心里轻漂"
- * 入场过渡（.regathering 阶段，500ms）：
- *   translate / filter / opacity 三者统一 500ms transition —— 落定硬币"归位"到
- *   中心并同步入雾。
+ *
+ * LAND→HOLD 平滑过渡：
+ *   transition: filter 600ms / opacity 600ms ease-out —— 落定硬币（.just-landed
+ *   末态：filter blur 0 / opacity 1）切到 .holding 时，blur 0→6px / opacity 1→0.82
+ *   在 600ms 内自动平滑过渡。不再有 startRegather 35% 收拢位移（旧版本造成的
+ *   "突兀缩一下"症状），硬币留在落定原位 → 雾化升起。
+ *   transform: scale(0.94) 因为被 coin-breathe 占用所以会瞬切，但 0.06 的 scale
+ *   差在 6px blur 雾里视觉不可见，不影响体感。
  *
  * 和 .shaking 的差：
  *   .shaking  : blur 7px + coin-shake 0.2s（快速抖）+ coin-breathe 1s（快呼吸）
  *   .holding  : blur 6px + coin-hold-drift 3.6s（慢漂）+ coin-breathe 2.4s（慢呼吸）
- *   节奏对比（快/慢 × 抖/漂）让用户直觉感知"紧张"和"静候"的差异。 */
+ *   节奏对比（快/慢 × 抖/漂）让用户直觉感知"紧张"和"静候"的差异。
+ *
+ * transition 只挂在 .holding 选择器上（不挂在 .shaking）—— HOLD→SHAKE 反向切换
+ * 选择器不再匹配，由 .coin-spin 基础 transition (filter/opacity 0.4s) 接管，
+ * shake 仍然瞬时响应不被 600ms 拖慢。 */
 .coin-wrap.holding .coin-spin {
   animation:
     coin-breathe 2.4s ease-in-out infinite alternate,
@@ -366,44 +370,8 @@ button { touch-action: manipulation; }
   filter: blur(6px) saturate(0.8);
   opacity: 0.82;
   transform: scale(0.94);
+  transition: filter 600ms ease-out, opacity 600ms ease-out;
   will-change: filter, transform, translate, opacity;
-}
-
-/* regathering：LAND→HOLD 的过渡 —— 3 枚硬币向 coinsRow 中心收拢（translate），
- * 同步 halo 淡入 + blur 加深。--home-dx/--home-dy 由 startRegather() 算好写入。
- * 500ms 用 ease-out 让收拢一开始快、尾部缓，像"被轻轻拾起"的弧线。 */
-.coin-wrap.holding.regathering {
-  translate: var(--home-dx, 0) var(--home-dy, 0);
-  transition: translate 500ms cubic-bezier(.25, .6, .3, 1);
-}
-.coin-wrap.holding.regathering .coin-spin {
-  transition: filter 500ms ease-out, opacity 500ms ease-out;
-}
-
-/* 入场过渡：新 3 枚 .coin-wrap 从"无"到稳态 HOLD 的 500ms 渐显。
- * 走 animation + forwards 而不是 transition —— 稳态 .coin-wrap.holding .coin-spin
- * 本身就带 animation: coin-breathe + coin-hold-drift 两个无限循环；
- * .entering 的 animation 覆盖它们一次跑完，to 态的 scale/opacity/filter 与稳态
- * 静态值（scale 0.94 / opacity 0.82 / blur 6px）精确匹配，保证 JS 移除 .entering
- * 瞬间 coin-breathe 从 from(scale 0.94) 接上，不闪帧。 */
-.coin-wrap.holding.entering .coin-spin {
-  animation: holding-enter 500ms ease-out forwards;
-}
-@keyframes holding-enter {
-  from {
-    opacity: 0;
-    transform: scale(0.82);
-    filter: blur(10px) saturate(0.8);
-    translate: 0 0;
-  }
-  to {
-    opacity: 0.82;
-    transform: scale(0.94);
-    filter: blur(6px) saturate(0.8);
-    /* 精确匹配 coin-hold-drift keyframes 的 0% 起点，保证 JS 移除 .entering
-     * 瞬间稳态 drift animation 从 translate -1.5px 0.5px 起步，无缝衔接。*/
-    translate: -1.5px 0.5px;
-  }
 }
 
 @keyframes coin-hold-drift {
@@ -815,8 +783,60 @@ button { touch-action: manipulation; }
 /* 状态文字 */
 .df-status { text-align: center; margin-top: 4px; }
 .df-instr {
-  font-size: 22px; letter-spacing: 6px; color: var(--text);
+  font-size: 22px; letter-spacing: 6px; color: var(--text-dim);
   min-height: 30px;
+  /* off 态用 var(--text-dim) 适度收敛（rgba(237,228,204,0.6)），给 ready
+   * 态的亮度上行留空间。否则若 off 用 --text(#ede4cc 满亮)、ready 用金色渐变，
+   * 金色基色比 --text 暗，对比方向反了，用户觉得"不明显"（实测反馈根因）。
+   * letter-spacing 也加进 transition：ready 态 6px → 9px 字距撑开，物理化。*/
+  transition: color 300ms ease-out, letter-spacing 300ms ease-out;
+}
+/* "凝神静候" 大字 ready 态 —— 状态机进 HOLD 时打开流光，"现在可以摇" 的
+ * 主视觉信号。三轴拉开 ready vs not-ready 的对比：
+ *   1. 亮度：基色用 rgba(232,209,153,1) ≈ --gold-hi，比 --text 还略亮；
+ *      峰值用 rgba(255,250,225,1) 极亮 cream，sweep 不让 ready 出现"比 off 暗"
+ *      的瞬间。
+ *   2. 字距：letter-spacing 6 → 9px，四字"撑开"约 12px 总宽，可感的物理变化。
+ *   3. 光晕：drop-shadow 10px / alpha 0.55 暖金扩散，文字"亮起来"的视觉重量
+ *      （color:transparent 不能用 text-shadow，drop-shadow 是替代方案）。
+ * 流光是 sweep（持续 background-position 位移）不是 pulse（尺寸/亮度脉冲）——
+ * 不灯泡式。1.8s 周期比 2.4s 更紧迫一档（"系统在邀请"），仍属 ambient 不刺激。
+ * SHAKING / LAND 时由 JS 清掉 .shake-ready 类，文本回到 var(--text-dim)。 */
+.df-instr.shake-ready {
+  background: linear-gradient(
+    105deg,
+    rgba(232,209,153,1) 0%,
+    rgba(232,209,153,1) 32%,
+    rgba(255,250,225,1) 50%,
+    rgba(232,209,153,1) 68%,
+    rgba(232,209,153,1) 100%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  letter-spacing: 9px;
+  filter: drop-shadow(0 0 10px rgba(232,209,153,0.55));
+  animation: text-shake-sweep 1.8s linear infinite;
+  will-change: background-position;
+}
+@keyframes text-shake-sweep {
+  from { background-position: 220% 0; }
+  to   { background-position: -120% 0; }
+}
+/* "金笔生形" 系统书写仪式中的 narrative title —— 大字承担 idx===0 描边段
+ * 章节名，告诉用户"系统在画笔仪式中"。solid gold-hi（不流光，因 shimmer
+ * 是 "you can act"，这里是 "system is acting"，语义不同）。
+ *   - color: --gold-hi 实色，区别于 off 态 dim 灰白和 ready 态金色渐变流光
+ *   - letter-spacing: 8px 中字距（撑开但不到 ready 的 9px）
+ *   - drop-shadow 柔金光晕陪衬底部金线 SVG 描边
+ *   - 无 animation —— 视觉重心给铜钱区的 stroke-draw / coin-fill-in 进程，
+ *     大字只做 "标题"角色 */
+.df-instr.calligraphy-active {
+  color: var(--gold-hi);
+  letter-spacing: 8px;
+  filter: drop-shadow(0 0 8px rgba(232,209,153,0.4));
 }
 .df-hint {
   margin-top: 8px;
@@ -1409,16 +1429,10 @@ button { touch-action: manipulation; }
   0%, 100% { opacity: 0.5; }
   50%      { opacity: 1; }
 }
-/* 外层 shake：极轻微旋转（±1°）模拟手心颤动。原本用 translate ±2px，
- * 但 CSS animation 优先级 > transition，translate 被 coin-shake 独占会
- * 覆盖 .coin-wrap 基础 translate transition —— 导致 regathering→shaking
- * 切换时 translate 从 var(--home-dx,dy)（约 -20,-15）瞬跳到 coin-shake
- * 起点（-2,-1），用户看到硬币从中心 18px 外瞬弹到原位，突兀。
- *
- * 改用 rotate 属性（CSS Transforms Level 2 独立属性）抖动，和 inline
- * style.transform='rotate(Xdeg)' 合成叠加（非覆盖），外层 translate 属性
- * 彻底留给基础 transition 做 regathering→shaking 的 500ms 平滑过渡。
- * 视觉上 blur(7px) 糊团下 ±1° 旋转仍能感受到手心抖动感。*/
+/* 外层 shake：极轻微旋转（±1°）模拟手心颤动。
+ * 用独立 rotate 属性（CSS Transforms Level 2）抖动，和 inline style.transform=
+ * 'rotate(Xdeg)' (seededLayout 摆位) 合成叠加而非覆盖，保留固定摆位角度。
+ * 视觉上 blur(7px) 糊团下 ±1° 旋转仍能感受到手心抖动感。 */
 @keyframes coin-shake {
   from { rotate: -1deg; }
   to   { rotate:  1deg; }
